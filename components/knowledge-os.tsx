@@ -1,0 +1,440 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  BarChart3,
+  CalendarDays,
+  Check,
+  ChevronRight,
+  CircleDot,
+  Columns3,
+  FileStack,
+  FilterX,
+  GitBranch,
+  LayoutDashboard,
+  Maximize2,
+  Network,
+  RefreshCw,
+  Search,
+  Settings2,
+  Wrench,
+} from "lucide-react";
+import { KnowledgeCanvas } from "@/components/knowledge-canvas";
+import { KnowledgeDrawer } from "@/components/knowledge-drawer";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { KnowledgeApiResponse, KnowledgeGraph } from "@/lib/knowledge-types";
+
+type Filters = {
+  area: string;
+  businessType: string;
+  segment: string;
+  priority: string;
+  responsible: string;
+};
+
+type SearchResult = {
+  key: string;
+  nodeId: string;
+  type: "Jarayon" | "Muammo" | "Bosqich" | "Canonical";
+  title: string;
+  subtitle: string;
+  processId?: string;
+};
+
+const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
+
+const FUTURE_VIEWS = [
+  { label: "Content Kanban", icon: Columns3 },
+  { label: "Content Calendar", icon: CalendarDays },
+  { label: "Content Nodes", icon: FileStack },
+  { label: "Tools", icon: Wrench },
+  { label: "Customer Journey / MOF", icon: GitBranch },
+  { label: "Dashboard", icon: LayoutDashboard },
+];
+
+function normalized(value: string) {
+  return value.toLocaleLowerCase("uz").replace(/[’‘`ʻʼ]/g, "'").trim();
+}
+
+function includes(value: string, query: string) {
+  return normalized(value).includes(normalized(query));
+}
+
+function splitOptions(values: string[]) {
+  const options = new Map<string, string>();
+  for (const value of values) {
+    value.split(/[,;|/\n]+/).map((part) => part.trim()).filter(Boolean).forEach((part) => options.set(normalized(part), part));
+  }
+  return Array.from(options.values()).sort((a, b) => a.localeCompare(b, "uz"));
+}
+
+function formatSyncedAt(value: string | null) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("uz-UZ", {
+    timeZone: "Asia/Tashkent",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value)).replace(",", "");
+}
+
+function FilterSelect({ value, onValueChange, label, options, className = "" }: { value: string; onValueChange: (value: string) => void; label: string; options: Array<string | { value: string; label: string }>; className?: string }) {
+  const selected = options.map((option) => typeof option === "string" ? { value: option, label: option } : option).find((option) => option.value === value);
+  return (
+    <Select value={value} onValueChange={(next) => onValueChange(next ?? "all")}>
+      <SelectTrigger size="sm" className={`h-9 min-w-[132px] border-slate-200 bg-white text-slate-700 shadow-none ${className}`} aria-label={label}>
+        <SelectValue placeholder={label}>{value === "all" ? label : selected?.label ?? value}</SelectValue>
+      </SelectTrigger>
+      <SelectContent align="start">
+        <SelectItem value="all">Barchasi</SelectItem>
+        {options.map((option) => {
+          const item = typeof option === "string" ? { value: option, label: option } : option;
+          return <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>;
+        })}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; spreadsheetIdConfigured: boolean }) {
+  const variables = [
+    { key: "GOOGLE_SHEET_ID", description: "Google Sheet identifikatori", ready: spreadsheetIdConfigured },
+    { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", description: "Viewer sifatida ulashiladigan service-account email", ready: !missing.includes("GOOGLE_SERVICE_ACCOUNT_EMAIL") },
+    { key: "GOOGLE_PRIVATE_KEY", description: "Service account private key; secret sifatida saqlanadi", ready: !missing.includes("GOOGLE_PRIVATE_KEY") },
+  ];
+  return (
+    <div className="relative flex h-full items-center justify-center overflow-auto bg-[#F7F9FC] p-5" style={{ backgroundImage: "radial-gradient(circle, #CBD5E1 1px, transparent 1px)", backgroundSize: "22px 22px" }}>
+      <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_18px_60px_rgba(16,24,40,.10)] sm:p-8">
+        <div className="flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Settings2 className="size-6" /></div>
+        <Badge variant="outline" className="mt-5 border-amber-200 bg-amber-50 text-amber-700">Google Sheets ulanishi kutilmoqda</Badge>
+        <h2 className="mt-3 text-2xl font-bold tracking-[-0.03em] text-slate-950">Bilimlar xaritasini ishga tushirish uchun 3 ta runtime qiymat kerak</h2>
+        <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Viewer</strong> sifatida ulashilgach, sayt ma’lumotlarni faqat serverda o‘qiydi. Maxfiy kalit brauzerga yuborilmaydi.</p>
+        <div className="mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200">
+          {variables.map((variable) => (
+            <div key={variable.key} className="flex items-start gap-3 p-4">
+              <span className={`mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full ${variable.ready ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                {variable.ready ? <Check className="size-4" /> : <CircleDot className="size-4" />}
+              </span>
+              <div className="min-w-0"><code className="text-[13px] font-bold text-slate-900">{variable.key}</code><p className="mt-1 text-[13px] leading-5 text-slate-500">{variable.description}</p></div>
+              <Badge variant="outline" className={`ml-auto shrink-0 ${variable.ready ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 text-slate-500"}`}>{variable.ready ? "Tayyor" : "Kiritilmagan"}</Badge>
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-[13px] leading-5 text-slate-600"><strong>Keyingi qadam:</strong> service-account emailni Google Sheet’ga Viewer qilib qo‘shing va yuqoridagi qiymatlarni Site environment variables bo‘limiga kiriting. Ulanishdan keyin xarita avtomatik yangilanadi.</div>
+      </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="relative h-full overflow-hidden bg-[#F7F9FC] p-12" style={{ backgroundImage: "radial-gradient(circle, #CBD5E1 1px, transparent 1px)", backgroundSize: "22px 22px" }}>
+      <div className="flex min-w-[980px] gap-20">
+        {[0, 1, 2, 3].map((column) => <div key={column} className="space-y-7" style={{ width: column === 0 ? 240 : 280 }}>
+          {Array.from({ length: column + 3 }).map((_, index) => <Skeleton key={index} className="h-24 w-full rounded-2xl bg-slate-200/80" />)}
+        </div>)}
+      </div>
+      <div className="absolute inset-x-0 top-1/2 mx-auto w-fit -translate-y-1/2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-600 shadow-lg"><RefreshCw className="mr-2 inline size-4 animate-spin text-blue-700" /> Google Sheet’dan bilimlar xaritasi olinmoqda…</div>
+    </div>
+  );
+}
+
+export function KnowledgeOS() {
+  const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
+  const [setup, setSetup] = useState<{ missing: string[]; spreadsheetIdConfigured: boolean } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [selection, setSelection] = useState<{ type: "process" | "problem"; id: string } | null>(null);
+  const [expandedAreas, setExpandedAreas] = useState<Set<string>>(new Set());
+  const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
+  const [expandedProcesses, setExpandedProcesses] = useState<Set<string>>(new Set());
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ id: string; token: number } | null>(null);
+  const [fitRequest, setFitRequest] = useState(0);
+  const initialGraphLoaded = useRef(false);
+
+  const loadData = useCallback(async (manual = false) => {
+    if (manual) setRefreshing(true);
+    try {
+      const response = await fetch(`/api/knowledge?refresh=${Date.now()}`, { cache: "no-store" });
+      const payload = await response.json() as KnowledgeApiResponse & { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Google Sheets bilan sinxronlash amalga oshmadi");
+      if (!payload.configured) {
+        setSetup({ missing: payload.missing, spreadsheetIdConfigured: payload.spreadsheetIdConfigured });
+        setGraph(null);
+      } else {
+        setGraph(payload.graph);
+        setSetup(null);
+        setLastSynced(payload.graph.meta.loadedAt);
+        setSyncError(null);
+        if (!initialGraphLoaded.current) {
+          setExpandedAreas(new Set(payload.graph.areas.map((area) => area.id)));
+          initialGraphLoaded.current = true;
+        }
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "Sinxronlashda xatolik yuz berdi");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadData();
+    const interval = window.setInterval(() => void loadData(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [loadData]);
+
+  const processById = useMemo(() => new Map(graph?.processes.map((item) => [item.id, item]) ?? []), [graph]);
+  const problemById = useMemo(() => new Map(graph?.problems.map((item) => [item.id, item]) ?? []), [graph]);
+  const canonicalById = useMemo(() => new Map(graph?.canonicalProblems.map((item) => [item.id, item]) ?? []), [graph]);
+
+  const filterOptions = useMemo(() => {
+    if (!graph) return { segments: [], businessTypes: [], priorities: [], responsibles: [] };
+    return {
+      segments: splitOptions([...graph.processes.map((item) => item.segmentUrgusi), ...graph.problems.map((item) => item.segmentUrgusi)]),
+      businessTypes: splitOptions([...graph.processes.map((item) => item.mosBiznesTuri), ...graph.problems.map((item) => item.mosBiznesTuri)]),
+      priorities: splitOptions(graph.problems.map((item) => item.ustuvorlik)),
+      responsibles: splitOptions(graph.processes.map((item) => item.masul)),
+    };
+  }, [graph]);
+
+  const { visibleProcessIds, visibleProblemIds } = useMemo(() => {
+    const processIds = new Set<string>();
+    const problemIds = new Set<string>();
+    if (!graph) return { visibleProcessIds: processIds, visibleProblemIds: problemIds };
+
+    for (const process of graph.processes) {
+      if (filters.area !== "all" && process.areaId !== filters.area) continue;
+      const related = process.problemIds.map((id) => problemById.get(id)).filter(Boolean);
+      const businessMatch = filters.businessType === "all" || includes(process.mosBiznesTuri, filters.businessType) || related.some((problem) => problem && includes(problem.mosBiznesTuri, filters.businessType));
+      const segmentMatch = filters.segment === "all" || includes(process.segmentUrgusi, filters.segment) || related.some((problem) => problem && includes(problem.segmentUrgusi, filters.segment));
+      const priorityMatch = filters.priority === "all" || related.some((problem) => problem && includes(problem.ustuvorlik, filters.priority));
+      const responsibleMatch = filters.responsible === "all" || includes(process.masul, filters.responsible);
+      if (businessMatch && segmentMatch && priorityMatch && responsibleMatch) processIds.add(process.id);
+    }
+
+    for (const problem of graph.problems) {
+      const process = processById.get(problem.jarayonId);
+      if (!process || !processIds.has(process.id)) continue;
+      const priorityMatch = filters.priority === "all" || includes(problem.ustuvorlik, filters.priority);
+      const businessMatch = filters.businessType === "all" || includes(problem.mosBiznesTuri, filters.businessType) || includes(process.mosBiznesTuri, filters.businessType);
+      const segmentMatch = filters.segment === "all" || includes(problem.segmentUrgusi, filters.segment) || includes(process.segmentUrgusi, filters.segment);
+      if (priorityMatch && businessMatch && segmentMatch) problemIds.add(problem.id);
+    }
+    return { visibleProcessIds: processIds, visibleProblemIds: problemIds };
+  }, [filters, graph, problemById, processById]);
+
+  const searchResults = useMemo<SearchResult[]>(() => {
+    if (!graph || normalized(searchQuery).length < 2) return [];
+    const query = normalized(searchQuery);
+    const results: Array<SearchResult & { score: number }> = [];
+    for (const process of graph.processes) {
+      const haystack = [process.jarayonId, process.kichikJarayon, process.bosqich, process.jarayonGuruhi, process.masul].join(" ");
+      if (includes(haystack, query)) results.push({ key: `p-${process.id}`, nodeId: process.id, type: "Jarayon", title: process.kichikJarayon || process.jarayonId, subtitle: `${process.jarayonId} · ${process.bosqich || process.jarayonGuruhi}`, processId: process.id, score: normalized(process.jarayonId) === query ? 100 : normalized(process.kichikJarayon).startsWith(query) ? 80 : 50 });
+    }
+    for (const problem of graph.problems) {
+      const canonical = canonicalById.get(problem.canonicalProblemId);
+      const haystack = [problem.muammoId, problem.muammo, problem.ustuvorlik, problem.canonicalProblemId, canonical?.title ?? ""].join(" ");
+      if (includes(haystack, query)) results.push({ key: `m-${problem.id}`, nodeId: problem.id, type: canonical && includes(canonical.title, query) ? "Canonical" : "Muammo", title: problem.muammo || problem.muammoId, subtitle: `${problem.muammoId} · ${problem.jarayonId}`, processId: problem.jarayonId, score: normalized(problem.muammoId) === query ? 100 : normalized(problem.muammo).startsWith(query) ? 80 : 45 });
+    }
+    for (const stage of graph.stages) {
+      if (includes(`${stage.bosqich} ${stage.jarayonGuruhi}`, query)) results.push({ key: `s-${stage.id}`, nodeId: stage.id, type: "Bosqich", title: stage.name, subtitle: `${stage.processCount} jarayon · ${stage.problemCount} muammo`, score: normalized(stage.name).startsWith(query) ? 70 : 35 });
+    }
+    return results.sort((a, b) => b.score - a.score).slice(0, 10).map(({ score: _score, ...result }) => result);
+  }, [canonicalById, graph, searchQuery]);
+
+  const focusNode = useCallback((result: SearchResult | { nodeId: string; processId?: string }) => {
+    if (!graph) return false;
+    let areaId: string | undefined;
+    let stageId: string | undefined;
+    let processId = result.processId;
+    const process = processId ? processById.get(processId) : processById.get(result.nodeId);
+    const problem = problemById.get(result.nodeId);
+    const stage = graph.stages.find((item) => item.id === result.nodeId);
+    const area = graph.areas.find((item) => item.id === result.nodeId);
+    if (problem && !processId) processId = problem.jarayonId;
+    const resolvedProcess = process ?? (processId ? processById.get(processId) : undefined);
+    if (resolvedProcess) { areaId = resolvedProcess.areaId; stageId = resolvedProcess.stageId; }
+    else if (stage) areaId = stage.areaId;
+    else if (area) areaId = area.id;
+    if (!areaId) return false;
+
+    setFilters(EMPTY_FILTERS);
+    setExpandedAreas((current) => new Set(current).add(areaId!));
+    if (stageId) setExpandedStages((current) => new Set(current).add(stageId!));
+    if (problem && processId) setExpandedProcesses((current) => new Set(current).add(processId!));
+    setHighlightedId(result.nodeId);
+    setFocusRequest({ id: result.nodeId, token: Date.now() });
+    setSearchOpen(false);
+    window.setTimeout(() => setHighlightedId((current) => current === result.nodeId ? null : current), 3200);
+    return true;
+  }, [graph, problemById, processById]);
+
+  useEffect(() => {
+    if (!graph) return;
+    type WebMcpContext = { registerTool?: (tool: Record<string, unknown>, options?: { signal: AbortSignal }) => void | Promise<void> };
+    const context = (document as Document & { modelContext?: WebMcpContext }).modelContext;
+    if (!context?.registerTool) return;
+    const controller = new AbortController();
+    try {
+      void Promise.resolve(context.registerTool({
+        name: "focus_knowledge_node",
+        title: "Bilimlar xaritasidagi tugunni ochish",
+        description: "Jarayon_ID yoki Muammo_ID bo‘yicha ota tugunlarni ochadi va natijani xarita markaziga olib keladi.",
+        inputSchema: { type: "object", properties: { id: { type: "string", description: "Jarayon_ID yoki Muammo_ID" } }, required: ["id"], additionalProperties: false },
+        annotations: { readOnlyHint: true, untrustedContentHint: false },
+        execute: (input: unknown) => {
+          const id = typeof input === "object" && input !== null && "id" in input ? String((input as { id: unknown }).id).trim() : "";
+          if (!id) throw new Error("id is required");
+          const process = processById.get(id);
+          const problem = problemById.get(id);
+          if (!process && !problem) throw new Error(`Node not found: ${id}`);
+          focusNode({ nodeId: id, processId: problem?.jarayonId });
+          return { id, type: process ? "process" : "problem", focused: true };
+        },
+      }, { signal: controller.signal })).catch(() => undefined);
+    } catch { /* Unsupported preview/browser context. */ }
+    return () => controller.abort();
+  }, [focusNode, graph, problemById, processById]);
+
+  const toggleSet = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) => setter((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const activeFilterCount = Object.values(filters).filter((value) => value !== "all").length;
+  const hasResults = visibleProcessIds.size > 0;
+
+  return (
+    <SidebarProvider defaultOpen style={{ "--sidebar-width": "232px", "--sidebar-width-icon": "68px" } as React.CSSProperties}>
+      <Sidebar collapsible="icon" className="border-r border-[#173663] bg-[#071B3B] text-white">
+        <SidebarHeader className="h-[72px] justify-center border-b border-white/10 px-3">
+          <div className="flex items-center gap-3 overflow-hidden px-1">
+            <div className="grid size-10 shrink-0 grid-cols-2 gap-1 rounded-xl bg-blue-600 p-2 shadow-[0_6px_18px_rgba(37,99,235,.3)]"><span className="rounded-[3px] bg-white" /><span className="rounded-[3px] bg-blue-200" /><span className="rounded-[3px] bg-blue-200" /><span className="rounded-[3px] bg-white" /></div>
+            <div className="min-w-0 group-data-[collapsible=icon]:hidden"><p className="truncate text-[15px] font-bold tracking-[-0.02em]">IBOX Knowledge OS</p><p className="mt-0.5 text-[11px] text-blue-200/70">Internal workspace</p></div>
+          </div>
+        </SidebarHeader>
+        <SidebarContent className="px-2 py-3">
+          <SidebarGroup>
+            <SidebarGroupLabel className="text-[11px] font-bold uppercase tracking-[0.09em] text-blue-200/50">Workspace</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem><SidebarMenuButton isActive tooltip="Mind Map" className="h-10 bg-blue-600 text-white hover:bg-blue-500 hover:text-white"><Network className="size-4" /><span>Mind Map</span></SidebarMenuButton></SidebarMenuItem>
+                {FUTURE_VIEWS.map(({ label, icon: Icon }) => <SidebarMenuItem key={label}><SidebarMenuButton disabled tooltip={`${label} — tez kunda`} className="h-10 text-blue-100/45"><Icon className="size-4" /><span>{label}</span><span className="ml-auto rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase">Soon</span></SidebarMenuButton></SidebarMenuItem>)}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter className="border-t border-white/10 p-3">
+          <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError ? "bg-amber-400" : graph ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError ? "Sync warning" : graph ? "Google Sheets connected" : "Setup required"}</span></div>
+        </SidebarFooter>
+      </Sidebar>
+
+      <SidebarInset className="h-svh min-w-0 overflow-hidden bg-[#F7F9FC]">
+        <header className="flex h-[72px] shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 lg:px-5">
+          <SidebarTrigger className="shrink-0" />
+          <div className="hidden min-w-[210px] lg:block"><h1 className="text-[16px] font-bold tracking-[-0.02em] text-slate-950">IBOX Business Knowledge OS</h1><p className="mt-0.5 text-[11px] text-slate-500">Jarayonlar va muammolar xaritasi</p></div>
+          <div className="relative min-w-0 flex-1 max-w-[560px]">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+            <Input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) focusNode(searchResults[0]); }} className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 pr-16 text-[14px] shadow-none focus-visible:bg-white" placeholder="Jarayon, muammo yoki ID bo‘yicha qidiring…" aria-label="Global qidiruv" />
+            <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 sm:block">Enter</kbd>
+            {searchOpen && normalized(searchQuery).length >= 2 && (
+              <div className="absolute left-0 right-0 top-[46px] z-40 max-h-[420px] overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(16,24,40,.16)]">
+                {searchResults.length ? searchResults.map((result) => <button key={result.key} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => focusNode(result)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-blue-50">
+                  <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">{result.type === "Muammo" || result.type === "Canonical" ? <AlertTriangle className="size-4" /> : result.type === "Bosqich" ? <GitBranch className="size-4" /> : <Network className="size-4" />}</span>
+                  <span className="min-w-0 flex-1"><span className="block truncate text-[14px] font-semibold text-slate-900">{result.title}</span><span className="mt-0.5 block truncate text-[12px] text-slate-500">{result.subtitle}</span></span>
+                  <Badge variant="secondary" className="text-[10px]">{result.type}</Badge><ChevronRight className="size-4 text-slate-300" />
+                </button>) : <div className="p-5 text-center text-sm text-slate-500">Hech narsa topilmadi</div>}
+              </div>
+            )}
+          </div>
+          <div className="hidden items-center gap-2 xl:flex">
+            <FilterSelect label="Yo‘nalish" value={filters.area} onValueChange={(area) => setFilters((current) => ({ ...current, area }))} options={graph?.areas.map((area) => ({ value: area.id, label: area.name })) ?? []} className="min-w-[138px]" />
+            <FilterSelect label="Segment" value={filters.segment} onValueChange={(segment) => setFilters((current) => ({ ...current, segment }))} options={filterOptions.segments} />
+            <FilterSelect label="Ustuvorlik" value={filters.priority} onValueChange={(priority) => setFilters((current) => ({ ...current, priority }))} options={filterOptions.priorities} />
+          </div>
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="size-10 shrink-0 border-slate-200" onClick={() => void loadData(true)} disabled={refreshing} aria-label="Ma’lumotlarni yangilash"><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button></TooltipTrigger><TooltipContent>Ma’lumotlarni yangilash</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="hidden size-10 shrink-0 border-slate-200 sm:inline-flex" onClick={() => setFitRequest((value) => value + 1)} aria-label="Xaritani ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Fit View</TooltipContent></Tooltip>
+        </header>
+
+        <div className="flex h-[54px] shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 scrollbar-none lg:px-5">
+          <span className="mr-1 flex shrink-0 items-center gap-1.5 text-[12px] font-semibold text-slate-500"><Settings2 className="size-4" /> Filtrlar</span>
+          <div className="flex shrink-0 gap-2 xl:hidden"><FilterSelect label="Yo‘nalish" value={filters.area} onValueChange={(area) => setFilters((current) => ({ ...current, area }))} options={graph?.areas.map((area) => ({ value: area.id, label: area.name })) ?? []} /><FilterSelect label="Segment" value={filters.segment} onValueChange={(segment) => setFilters((current) => ({ ...current, segment }))} options={filterOptions.segments} /><FilterSelect label="Ustuvorlik" value={filters.priority} onValueChange={(priority) => setFilters((current) => ({ ...current, priority }))} options={filterOptions.priorities} /></div>
+          <FilterSelect label="Biznes turi" value={filters.businessType} onValueChange={(businessType) => setFilters((current) => ({ ...current, businessType }))} options={filterOptions.businessTypes} className="min-w-[142px]" />
+          <FilterSelect label="Mas’ul" value={filters.responsible} onValueChange={(responsible) => setFilters((current) => ({ ...current, responsible }))} options={filterOptions.responsibles} />
+          {activeFilterCount > 0 && <Button variant="ghost" size="sm" className="h-9 shrink-0 text-slate-500" onClick={() => setFilters(EMPTY_FILTERS)}><FilterX className="size-4" /> Tozalash <Badge variant="secondary" className="ml-1">{activeFilterCount}</Badge></Button>}
+          <div className="ml-auto flex shrink-0 items-center gap-3 pl-3 text-[11px] text-slate-500">
+            {graph && <span>{visibleProcessIds.size} / {graph.processes.length} jarayon</span>}
+            <span className="hidden h-4 w-px bg-slate-200 sm:block" />
+            <span className="hidden sm:inline">Last synced: <strong className="font-semibold text-slate-700">{formatSyncedAt(lastSynced)}</strong></span>
+          </div>
+        </div>
+
+        <main className="relative min-h-0 flex-1">
+          {loading && !graph && !setup ? <LoadingState /> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : graph ? (
+            <>
+              <KnowledgeCanvas
+                graph={graph}
+                expandedAreas={expandedAreas}
+                expandedStages={expandedStages}
+                expandedProcesses={expandedProcesses}
+                visibleProcessIds={visibleProcessIds}
+                visibleProblemIds={visibleProblemIds}
+                highlightedId={highlightedId}
+                focusRequest={focusRequest}
+                fitRequest={fitRequest}
+                onAreaToggle={(id) => toggleSet(setExpandedAreas, id)}
+                onStageToggle={(id) => toggleSet(setExpandedStages, id)}
+                onProcessToggle={(id) => toggleSet(setExpandedProcesses, id)}
+                onProcessSelect={(id) => setSelection({ type: "process", id })}
+                onProblemSelect={(id) => setSelection({ type: "problem", id })}
+              />
+              {!hasResults && <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/55 backdrop-blur-[2px]"><div className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-xl"><BarChart3 className="mx-auto size-6 text-slate-400" /><h2 className="mt-3 font-bold text-slate-900">Filtrlar bo‘yicha natija topilmadi</h2><p className="mt-1 text-sm text-slate-500">Filtrlarni o‘zgartiring yoki tozalang.</p><Button className="pointer-events-auto mt-4" variant="outline" onClick={() => setFilters(EMPTY_FILTERS)}>Filtrlarni tozalash</Button></div></div>}
+              <KnowledgeDrawer graph={graph} selection={selection} onClose={() => setSelection(null)} onProcessSelect={(id) => setSelection({ type: "process", id })} onProblemSelect={(id) => setSelection({ type: "problem", id })} />
+            </>
+          ) : <div className="flex h-full items-center justify-center bg-slate-50"><div className="rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Ma’lumotlarni yuklab bo‘lmadi</h2><Button className="mt-4" onClick={() => void loadData(true)}>Qayta urinish</Button></div></div>}
+
+          {syncError && graph && <button type="button" onClick={() => void loadData(true)} className="absolute right-5 top-4 z-30 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
+        </main>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
