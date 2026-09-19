@@ -6,7 +6,7 @@ export const revalidate = 0;
 
 const noStoreHeaders = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
 
-export async function GET() {
+export async function GET(request: Request) {
   const missing = getMissingGoogleConfiguration();
   if (missing.length) {
     return NextResponse.json(
@@ -16,7 +16,7 @@ export async function GET() {
   }
 
   try {
-    const graph = await loadKnowledgeGraph();
+    const graph = await loadKnowledgeGraph(new URL(request.url).searchParams.get("refresh") === "1");
     return NextResponse.json({ configured: true, graph }, { headers: noStoreHeaders });
   } catch (error) {
     return NextResponse.json(

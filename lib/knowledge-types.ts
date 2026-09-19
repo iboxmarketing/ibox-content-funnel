@@ -36,8 +36,14 @@ export interface KnowledgeProcess {
   asosiyHarakat: string;
   natija: string;
   masul: string;
+  roleNormalized: string;
   mosBiznesTuri: string;
+  businessTypeNormalized: string;
   segmentUrgusi: string;
+  primarySegment: string;
+  segmentTags: string;
+  mindmapStageId: string;
+  mindmapStage: string;
   oldingiJarayonId: string;
   keyingiJarayonId: string;
   problemIds: string[];
@@ -58,7 +64,10 @@ export interface KnowledgeProblem {
   uzoqMuddatliXavf: string;
   kerakliNatija: string;
   mosBiznesTuri: string;
+  businessTypeNormalized: string;
   segmentUrgusi: string;
+  primarySegment: string;
+  segmentTags: string;
   ustuvorlik: string;
   kontentPotensiali: string;
   canonicalProblemId: string;
@@ -82,6 +91,10 @@ export interface KnowledgeGraph {
     loadedAt: string;
     spreadsheetId: string;
     unlinkedProblemCount: number;
+    missingCanonicalLinkCount: number;
+    duplicateProcessCount: number;
+    duplicateProblemCount: number;
+    stageCount: number;
     warnings: string[];
   };
 }

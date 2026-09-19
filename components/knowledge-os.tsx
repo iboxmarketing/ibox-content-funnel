@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import {
   AlertTriangle,
   BarChart3,
@@ -50,6 +51,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KnowledgeApiResponse, KnowledgeGraph } from "@/lib/knowledge-types";
+import { recalculateSchedule } from "@/lib/scheduling-engine";
+import type { ProductionApiResponse, ProductionDataset } from "@/lib/production-types";
 
 type Filters = {
   area: string;
@@ -70,9 +73,18 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
+type MainView = "mindmap" | "kanban" | "calendar";
+
+const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
+const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
+
+const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
+  { id: "mindmap", label: "Mind Map", icon: Network },
+  { id: "kanban", label: "Content Kanban", icon: Columns3 },
+  { id: "calendar", label: "Content Calendar", icon: CalendarDays },
+];
+
 const FUTURE_VIEWS = [
-  { label: "Content Kanban", icon: Columns3 },
-  { label: "Content Calendar", icon: CalendarDays },
   { label: "Content Nodes", icon: FileStack },
   { label: "Tools", icon: Wrench },
   { label: "Customer Journey / MOF", icon: GitBranch },
@@ -97,7 +109,7 @@ function splitOptions(values: string[]) {
 
 function formatSyncedAt(value: string | null) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("uz-UZ", {
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Tashkent",
     day: "2-digit",
     month: "2-digit",
@@ -105,7 +117,9 @@ function formatSyncedAt(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).format(new Date(value)).replace(",", "");
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("day")}.${part("month")}.${part("year")} ${part("hour")}:${part("minute")}`;
 }
 
 function FilterSelect({ value, onValueChange, label, options, className = "" }: { value: string; onValueChange: (value: string) => void; label: string; options: Array<string | { value: string; label: string }>; className?: string }) {
@@ -137,7 +151,7 @@ function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; s
       <div className="w-full max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-[0_18px_60px_rgba(16,24,40,.10)] sm:p-8">
         <div className="flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Settings2 className="size-6" /></div>
         <Badge variant="outline" className="mt-5 border-amber-200 bg-amber-50 text-amber-700">Google Sheets ulanishi kutilmoqda</Badge>
-        <h2 className="mt-3 text-2xl font-bold tracking-[-0.03em] text-slate-950">Bilimlar xaritasini ishga tushirish uchun 3 ta runtime qiymat kerak</h2>
+        <h2 className="mt-3 text-2xl font-bold tracking-[-0.03em] text-slate-950">Tizimni ishga tushirish uchun {missing.length} ta qiymat yetishmayapti</h2>
         <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Viewer</strong> sifatida ulashilgach, sayt ma’lumotlarni faqat serverda o‘qiydi. Maxfiy kalit brauzerga yuborilmaydi.</p>
         <div className="mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200">
           {variables.map((variable) => (
@@ -170,14 +184,18 @@ function LoadingState() {
 }
 
 export function KnowledgeOS() {
+  const [activeView, setActiveView] = useState<MainView>("mindmap");
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
+  const [production, setProduction] = useState<ProductionDataset | null>(null);
   const [setup, setSetup] = useState<{ missing: string[]; spreadsheetIdConfigured: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
+  const [productionSynced, setProductionSynced] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [searchQuery, setSearchQuery] = useState("");
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [searchOpen, setSearchOpen] = useState(false);
   const [selection, setSelection] = useState<{ type: "process" | "problem"; id: string } | null>(null);
   const [expandedAreas, setExpandedAreas] = useState<Set<string>>(new Set());
@@ -191,7 +209,7 @@ export function KnowledgeOS() {
   const loadData = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const response = await fetch(`/api/knowledge?refresh=${Date.now()}`, { cache: "no-store" });
+      const response = await fetch(`/api/knowledge${manual ? "?refresh=1" : ""}`, { cache: "no-store" });
       const payload = await response.json() as KnowledgeApiResponse & { error?: string };
       if (!response.ok) throw new Error(payload.error || "Google Sheets bilan sinxronlash amalga oshmadi");
       if (!payload.configured) {
@@ -215,11 +233,47 @@ export function KnowledgeOS() {
     }
   }, []);
 
+  const loadProduction = useCallback(async (manual = false) => {
+    if (manual) setRefreshing(true);
+    try {
+      const response = await fetch(`/api/production${manual ? "?refresh=1" : ""}`, { cache: "no-store" });
+      const payload = await response.json() as ProductionApiResponse & { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Production database bilan sinxronlash amalga oshmadi");
+      if (!payload.configured) {
+        setSetup({ missing: payload.missing, spreadsheetIdConfigured: payload.spreadsheetIdConfigured });
+        setProduction(null);
+      } else {
+        setProduction(payload.dataset);
+        setSetup(null);
+        setProductionSynced(payload.dataset.meta.loadedAt);
+        setSyncError(null);
+      }
+    } catch (error) {
+      setSyncError(error instanceof Error ? error.message : "Production sinxronlashda xatolik yuz berdi");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
   useEffect(() => {
+    // Data fetching is an external subscription to the Sheet-backed API.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadData();
     const interval = window.setInterval(() => void loadData(), 60_000);
     return () => window.clearInterval(interval);
   }, [loadData]);
+
+  useEffect(() => {
+    if (activeView === "mindmap") return;
+    // Load production data only when an operational view is opened.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadProduction();
+    const interval = window.setInterval(() => void loadProduction(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [activeView, loadProduction]);
+
+  const productionSchedule = useMemo(() => production ? recalculateSchedule(production) : null, [production]);
 
   const processById = useMemo(() => new Map(graph?.processes.map((item) => [item.id, item]) ?? []), [graph]);
   const problemById = useMemo(() => new Map(graph?.problems.map((item) => [item.id, item]) ?? []), [graph]);
@@ -228,10 +282,10 @@ export function KnowledgeOS() {
   const filterOptions = useMemo(() => {
     if (!graph) return { segments: [], businessTypes: [], priorities: [], responsibles: [] };
     return {
-      segments: splitOptions([...graph.processes.map((item) => item.segmentUrgusi), ...graph.problems.map((item) => item.segmentUrgusi)]),
-      businessTypes: splitOptions([...graph.processes.map((item) => item.mosBiznesTuri), ...graph.problems.map((item) => item.mosBiznesTuri)]),
+      segments: splitOptions([...graph.processes.map((item) => item.primarySegment || item.segmentUrgusi), ...graph.problems.map((item) => item.primarySegment || item.segmentUrgusi)]),
+      businessTypes: splitOptions([...graph.processes.map((item) => item.businessTypeNormalized || item.mosBiznesTuri), ...graph.problems.map((item) => item.businessTypeNormalized || item.mosBiznesTuri)]),
       priorities: splitOptions(graph.problems.map((item) => item.ustuvorlik)),
-      responsibles: splitOptions(graph.processes.map((item) => item.masul)),
+      responsibles: splitOptions(graph.processes.map((item) => item.roleNormalized || item.masul)),
     };
   }, [graph]);
 
@@ -243,10 +297,10 @@ export function KnowledgeOS() {
     for (const process of graph.processes) {
       if (filters.area !== "all" && process.areaId !== filters.area) continue;
       const related = process.problemIds.map((id) => problemById.get(id)).filter(Boolean);
-      const businessMatch = filters.businessType === "all" || includes(process.mosBiznesTuri, filters.businessType) || related.some((problem) => problem && includes(problem.mosBiznesTuri, filters.businessType));
-      const segmentMatch = filters.segment === "all" || includes(process.segmentUrgusi, filters.segment) || related.some((problem) => problem && includes(problem.segmentUrgusi, filters.segment));
+      const businessMatch = filters.businessType === "all" || includes(process.businessTypeNormalized || process.mosBiznesTuri, filters.businessType) || related.some((problem) => problem && includes(problem.businessTypeNormalized || problem.mosBiznesTuri, filters.businessType));
+      const segmentMatch = filters.segment === "all" || includes(`${process.primarySegment} ${process.segmentTags} ${process.segmentUrgusi}`, filters.segment) || related.some((problem) => problem && includes(`${problem.primarySegment} ${problem.segmentTags} ${problem.segmentUrgusi}`, filters.segment));
       const priorityMatch = filters.priority === "all" || related.some((problem) => problem && includes(problem.ustuvorlik, filters.priority));
-      const responsibleMatch = filters.responsible === "all" || includes(process.masul, filters.responsible);
+      const responsibleMatch = filters.responsible === "all" || includes(process.roleNormalized || process.masul, filters.responsible);
       if (businessMatch && segmentMatch && priorityMatch && responsibleMatch) processIds.add(process.id);
     }
 
@@ -254,16 +308,16 @@ export function KnowledgeOS() {
       const process = processById.get(problem.jarayonId);
       if (!process || !processIds.has(process.id)) continue;
       const priorityMatch = filters.priority === "all" || includes(problem.ustuvorlik, filters.priority);
-      const businessMatch = filters.businessType === "all" || includes(problem.mosBiznesTuri, filters.businessType) || includes(process.mosBiznesTuri, filters.businessType);
-      const segmentMatch = filters.segment === "all" || includes(problem.segmentUrgusi, filters.segment) || includes(process.segmentUrgusi, filters.segment);
+      const businessMatch = filters.businessType === "all" || includes(problem.businessTypeNormalized || problem.mosBiznesTuri, filters.businessType) || includes(process.businessTypeNormalized || process.mosBiznesTuri, filters.businessType);
+      const segmentMatch = filters.segment === "all" || includes(`${problem.primarySegment} ${problem.segmentTags} ${problem.segmentUrgusi}`, filters.segment) || includes(`${process.primarySegment} ${process.segmentTags} ${process.segmentUrgusi}`, filters.segment);
       if (priorityMatch && businessMatch && segmentMatch) problemIds.add(problem.id);
     }
     return { visibleProcessIds: processIds, visibleProblemIds: problemIds };
   }, [filters, graph, problemById, processById]);
 
   const searchResults = useMemo<SearchResult[]>(() => {
-    if (!graph || normalized(searchQuery).length < 2) return [];
-    const query = normalized(searchQuery);
+    if (!graph || normalized(deferredSearchQuery).length < 2) return [];
+    const query = normalized(deferredSearchQuery);
     const results: Array<SearchResult & { score: number }> = [];
     for (const process of graph.processes) {
       const haystack = [process.jarayonId, process.kichikJarayon, process.bosqich, process.jarayonGuruhi, process.masul].join(" ");
@@ -275,10 +329,17 @@ export function KnowledgeOS() {
       if (includes(haystack, query)) results.push({ key: `m-${problem.id}`, nodeId: problem.id, type: canonical && includes(canonical.title, query) ? "Canonical" : "Muammo", title: problem.muammo || problem.muammoId, subtitle: `${problem.muammoId} · ${problem.jarayonId}`, processId: problem.jarayonId, score: normalized(problem.muammoId) === query ? 100 : normalized(problem.muammo).startsWith(query) ? 80 : 45 });
     }
     for (const stage of graph.stages) {
-      if (includes(`${stage.bosqich} ${stage.jarayonGuruhi}`, query)) results.push({ key: `s-${stage.id}`, nodeId: stage.id, type: "Bosqich", title: stage.name, subtitle: `${stage.processCount} jarayon · ${stage.problemCount} muammo`, score: normalized(stage.name).startsWith(query) ? 70 : 35 });
+      if (includes(`${stage.name} ${stage.bosqich} ${stage.jarayonGuruhi}`, query)) results.push({ key: `s-${stage.id}`, nodeId: stage.id, type: "Bosqich", title: stage.name, subtitle: `${stage.processCount} jarayon · ${stage.problemCount} muammo`, score: normalized(stage.name).startsWith(query) ? 70 : 35 });
     }
-    return results.sort((a, b) => b.score - a.score).slice(0, 10).map(({ score: _score, ...result }) => result);
-  }, [canonicalById, graph, searchQuery]);
+    return results.sort((a, b) => b.score - a.score).slice(0, 10).map((result) => ({
+      key: result.key,
+      nodeId: result.nodeId,
+      type: result.type,
+      title: result.title,
+      subtitle: result.subtitle,
+      processId: result.processId,
+    }));
+  }, [canonicalById, deferredSearchQuery, graph]);
 
   const focusNode = useCallback((result: SearchResult | { nodeId: string; processId?: string }) => {
     if (!graph) return false;
@@ -357,18 +418,19 @@ export function KnowledgeOS() {
             <SidebarGroupLabel className="text-[11px] font-bold uppercase tracking-[0.09em] text-blue-200/50">Workspace</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                <SidebarMenuItem><SidebarMenuButton isActive tooltip="Mind Map" className="h-10 bg-blue-600 text-white hover:bg-blue-500 hover:text-white"><Network className="size-4" /><span>Mind Map</span></SidebarMenuButton></SidebarMenuItem>
+                {ACTIVE_VIEWS.map(({ id, label, icon: Icon }) => <SidebarMenuItem key={id}><SidebarMenuButton isActive={activeView === id} tooltip={label} onClick={() => setActiveView(id)} className={`h-10 ${activeView === id ? "bg-blue-600 text-white hover:bg-blue-500 hover:text-white" : "text-blue-100/75 hover:bg-white/10 hover:text-white"}`}><Icon className="size-4" /><span>{label}</span></SidebarMenuButton></SidebarMenuItem>)}
                 {FUTURE_VIEWS.map(({ label, icon: Icon }) => <SidebarMenuItem key={label}><SidebarMenuButton disabled tooltip={`${label} — tez kunda`} className="h-10 text-blue-100/45"><Icon className="size-4" /><span>{label}</span><span className="ml-auto rounded bg-white/5 px-1.5 py-0.5 text-[9px] uppercase">Soon</span></SidebarMenuButton></SidebarMenuItem>)}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="border-t border-white/10 p-3">
-          <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError ? "bg-amber-400" : graph ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError ? "Sync warning" : graph ? "Google Sheets connected" : "Setup required"}</span></div>
+          <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError ? "bg-amber-400" : graph || production ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError ? "Sync warning" : graph || production ? "Google Sheets connected" : "Setup required"}</span></div>
         </SidebarFooter>
       </Sidebar>
 
       <SidebarInset className="h-svh min-w-0 overflow-hidden bg-[#F7F9FC]">
+        {activeView === "mindmap" ? <>
         <header className="flex h-[72px] shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-3 lg:px-5">
           <SidebarTrigger className="shrink-0" />
           <div className="hidden min-w-[210px] lg:block"><h1 className="text-[16px] font-bold tracking-[-0.02em] text-slate-950">IBOX Business Knowledge OS</h1><p className="mt-0.5 text-[11px] text-slate-500">Jarayonlar va muammolar xaritasi</p></div>
@@ -403,6 +465,7 @@ export function KnowledgeOS() {
           {activeFilterCount > 0 && <Button variant="ghost" size="sm" className="h-9 shrink-0 text-slate-500" onClick={() => setFilters(EMPTY_FILTERS)}><FilterX className="size-4" /> Tozalash <Badge variant="secondary" className="ml-1">{activeFilterCount}</Badge></Button>}
           <div className="ml-auto flex shrink-0 items-center gap-3 pl-3 text-[11px] text-slate-500">
             {graph && <span>{visibleProcessIds.size} / {graph.processes.length} jarayon</span>}
+            {graph && <span className={`rounded-full border px-2 py-1 font-semibold ${graph.meta.warnings.length ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{graph.meta.warnings.length ? `${graph.meta.warnings.length} data warning` : `Data healthy · ${graph.meta.stageCount} stage`}</span>}
             <span className="hidden h-4 w-px bg-slate-200 sm:block" />
             <span className="hidden sm:inline">Last synced: <strong className="font-semibold text-slate-700">{formatSyncedAt(lastSynced)}</strong></span>
           </div>
@@ -434,6 +497,19 @@ export function KnowledgeOS() {
 
           {syncError && graph && <button type="button" onClick={() => void loadData(true)} className="absolute right-5 top-4 z-30 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
         </main>
+        </> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && productionSchedule ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            {activeView === "kanban" ? (
+              <ContentKanban dataset={production} schedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
+            ) : (
+              <ContentCalendar dataset={production} baseSchedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
+            )}
+            {syncError && <button type="button" onClick={() => void loadProduction(true)} className="absolute right-5 top-16 z-50 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
+          </div>
+        ) : syncError ? (
+          <div className="flex h-full items-center justify-center bg-slate-50"><div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Production ma’lumotlarini yuklab bo‘lmadi</h2><p className="mt-2 text-sm text-slate-500">{syncError}</p><Button className="mt-4" onClick={() => void loadProduction(true)}>Qayta urinish</Button></div></div>
+        ) : <LoadingState />}
       </SidebarInset>
     </SidebarProvider>
   );

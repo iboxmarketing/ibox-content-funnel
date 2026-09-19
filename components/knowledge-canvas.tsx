@@ -194,6 +194,7 @@ function ExpandButton({ expanded, label, onClick }: { expanded: boolean; label: 
 const GraphNode = memo(function GraphNode({
   node,
   graph,
+  indexes,
   expandedAreas,
   expandedStages,
   expandedProcesses,
@@ -208,6 +209,12 @@ const GraphNode = memo(function GraphNode({
 }: {
   node: PointNode;
   graph: KnowledgeGraph;
+  indexes: {
+    areaById: Map<string, KnowledgeGraph["areas"][number]>;
+    stageById: Map<string, KnowledgeGraph["stages"][number]>;
+    processById: Map<string, KnowledgeProcess>;
+    problemById: Map<string, KnowledgeProblem>;
+  };
   expandedAreas: Set<string>;
   expandedStages: Set<string>;
   expandedProcesses: Set<string>;
@@ -220,13 +227,13 @@ const GraphNode = memo(function GraphNode({
   onProcessSelect: (id: string) => void;
   onProblemSelect: (id: string) => void;
 }) {
-  const area = graph.areas.find((item) => item.id === node.areaId)!;
+  const area = indexes.areaById.get(node.areaId)!;
   const highlighted = highlightedId === node.id;
   const commonStyle = { left: node.x, top: node.y, width: node.width, height: node.height };
   const highlightClass = highlighted ? "ring-4 ring-blue-400/40 border-blue-500 shadow-[0_8px_26px_rgba(37,99,235,.16)]" : "";
 
   if (node.kind === "area") {
-    const item = graph.areas.find((candidate) => candidate.id === node.id)!;
+    const item = indexes.areaById.get(node.id)!;
     const processCount = graph.processes.filter((p) => p.areaId === item.id && visibleProcessIds.has(p.id)).length;
     const problemCount = graph.problems.filter((p) => p.areaId === item.id && visibleProblemIds.has(p.id)).length;
     return (
@@ -248,7 +255,7 @@ const GraphNode = memo(function GraphNode({
   }
 
   if (node.kind === "stage") {
-    const item = graph.stages.find((candidate) => candidate.id === node.id)!;
+    const item = indexes.stageById.get(node.id)!;
     const processCount = item.processIds.filter((id) => visibleProcessIds.has(id)).length;
     const problemCount = graph.processes
       .filter((process) => item.processIds.includes(process.id) && visibleProcessIds.has(process.id))
@@ -268,7 +275,7 @@ const GraphNode = memo(function GraphNode({
   }
 
   if (node.kind === "process") {
-    const item = graph.processes.find((candidate) => candidate.id === node.id)!;
+    const item = indexes.processById.get(node.id)!;
     const problemCount = item.problemIds.filter((id) => visibleProblemIds.has(id)).length;
     return (
       <button
@@ -297,7 +304,7 @@ const GraphNode = memo(function GraphNode({
     );
   }
 
-  const item = graph.problems.find((candidate) => candidate.id === node.id)!;
+  const item = indexes.problemById.get(node.id)!;
   const tone = priorityTone(item.ustuvorlik);
   return (
     <button
@@ -353,33 +360,44 @@ export function KnowledgeCanvas({
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
+  const didInitialFitRef = useRef(false);
   const [transform, setTransform] = useState<Transform>({ x: 30, y: 30, scale: 0.8 });
-  const [hasFitted, setHasFitted] = useState(false);
+  const [viewportSize, setViewportSize] = useState({ width: 900, height: 600 });
   const layout = useMemo(
     () => buildLayout(graph, expandedAreas, expandedStages, expandedProcesses, visibleProcessIds, visibleProblemIds),
     [graph, expandedAreas, expandedStages, expandedProcesses, visibleProcessIds, visibleProblemIds],
   );
   const colors = useMemo(() => new Map(graph.areas.map((area) => [area.id, area.color])), [graph.areas]);
+  const indexes = useMemo(() => ({
+    areaById: new Map(graph.areas.map((item) => [item.id, item])),
+    stageById: new Map(graph.stages.map((item) => [item.id, item])),
+    processById: new Map(graph.processes.map((item) => [item.id, item])),
+    problemById: new Map(graph.problems.map((item) => [item.id, item])),
+  }), [graph]);
 
   const fitView = useCallback(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
     const rect = viewport.getBoundingClientRect();
-    const scale = Math.min(1, Math.max(0.18, Math.min((rect.width - 96) / layout.width, (rect.height - 96) / layout.height)));
+    const scale = Math.min(1, Math.max(0.05, Math.min((rect.width - 96) / layout.width, (rect.height - 96) / layout.height)));
     setTransform({ x: (rect.width - layout.width * scale) / 2, y: Math.max(32, (rect.height - layout.height * scale) / 2), scale });
   }, [layout.height, layout.width]);
 
   useLayoutEffect(() => {
-    if (!hasFitted && layout.nodes.length) {
-      fitView();
-      setHasFitted(true);
-    }
-  }, [fitView, hasFitted, layout.nodes.length]);
+    if (didInitialFitRef.current || !layout.nodes.length) return;
+    didInitialFitRef.current = true;
+    const frame = requestAnimationFrame(fitView);
+    return () => cancelAnimationFrame(frame);
+  }, [fitView, layout.nodes.length]);
 
   useEffect(() => {
-    const handleResize = () => fitView();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setViewportSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
   }, [fitView]);
 
   useEffect(() => {
@@ -407,7 +425,7 @@ export function KnowledgeCanvas({
     if (!viewport) return;
     const rect = viewport.getBoundingClientRect();
     setTransform((current) => {
-      const nextScale = Math.min(1.75, Math.max(0.18, current.scale * factor));
+      const nextScale = Math.min(1.75, Math.max(0.05, current.scale * factor));
       const worldX = (rect.width / 2 - current.x) / current.scale;
       const worldY = (rect.height / 2 - current.y) / current.scale;
       return { scale: nextScale, x: rect.width / 2 - worldX * nextScale, y: rect.height / 2 - worldY * nextScale };
@@ -421,7 +439,7 @@ export function KnowledgeCanvas({
       const pointerX = event.clientX - rect.left;
       const pointerY = event.clientY - rect.top;
       setTransform((current) => {
-        const nextScale = Math.min(1.75, Math.max(0.18, current.scale * Math.exp(-event.deltaY * 0.008)));
+        const nextScale = Math.min(1.75, Math.max(0.05, current.scale * Math.exp(-event.deltaY * 0.008)));
         const worldX = (pointerX - current.x) / current.scale;
         const worldY = (pointerY - current.y) / current.scale;
         return { scale: nextScale, x: pointerX - worldX * nextScale, y: pointerY - worldY * nextScale };
@@ -450,8 +468,8 @@ export function KnowledgeCanvas({
   const minimapView = {
     x: -transform.x / transform.scale,
     y: -transform.y / transform.scale,
-    width: (viewportRef.current?.clientWidth ?? 900) / transform.scale,
-    height: (viewportRef.current?.clientHeight ?? 600) / transform.scale,
+    width: viewportSize.width / transform.scale,
+    height: viewportSize.height / transform.scale,
   };
 
   return (
@@ -479,6 +497,7 @@ export function KnowledgeCanvas({
             key={`${node.kind}-${node.id}`}
             node={node}
             graph={graph}
+            indexes={indexes}
             expandedAreas={expandedAreas}
             expandedStages={expandedStages}
             expandedProcesses={expandedProcesses}
