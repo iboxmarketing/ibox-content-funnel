@@ -1,4 +1,5 @@
 import "server-only";
+import { validatePlanningConfig } from "./planning-config";
 
 import { env } from "cloudflare:workers";
 import type {
@@ -13,6 +14,7 @@ import type {
 } from "./knowledge-types";
 import type {
   ContentNode,
+  ChannelAccount,
   ProductionDataset,
   ProductionHoliday,
   ProductionItem,
@@ -50,6 +52,7 @@ const WORKFLOW_TAB = "19_CONTENT_WORKFLOW";
 const PUBLISHING_TAB = "20_PUBLISHING_RULES";
 const HOLIDAYS_TAB = "21_HOLIDAYS";
 const TASKS_TAB = "22_PRODUCTION_TASKS";
+const CHANNELS_TAB = "32_CHANNEL_ACCOUNTS";
 const CACHE_MS = 20_000;
 
 let tokenCache: { value: string; expiresAt: number } | null = null;
@@ -330,7 +333,7 @@ export function normalizeKnowledgeGraph(tabs: Map<string, SheetRecord[]>, spread
   };
 }
 
-function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadsheetId: string): ProductionDataset {
+export function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadsheetId: string): ProductionDataset {
   const warnings: string[] = [];
   const tools: ProductionTool[] = (tabs.get(TOOLS_TAB) ?? []).flatMap((record) => {
     const toolId = readSheetValue(record, "Tool_ID");
@@ -444,7 +447,7 @@ function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadshee
     return stageId ? [{
       contentType: readSheetValue(record, "Content_Type") || "DEFAULT", stageOrder: asNumber(readSheetValue(record, "Stage_Order")),
       stageId, stageName: readSheetValue(record, "Stage_Name") || stageId, ownerRole: readSheetValue(record, "Owner_Role"),
-      durationWorkdays: asNumber(readSheetValue(record, "Duration_Workdays")), dependencyStageIds: splitList(readSheetValue(record, "Dependency_Stage_ID")),
+      durationWorkdays: readSheetValue(record, "Duration_Workdays") ? Number(readSheetValue(record, "Duration_Workdays")) : -1, dependencyStageIds: splitList(readSheetValue(record, "Dependency_Stage_ID")),
       canRunParallel: asBoolean(readSheetValue(record, "Can_Run_Parallel")), reviewRequired: asBoolean(readSheetValue(record, "Review_Required")),
       active: asBoolean(readSheetValue(record, "Active")),
     }] : [];
@@ -456,6 +459,9 @@ function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadshee
       language: readSheetValue(record, "Language") || "*", postsPerWeek: asNumber(readSheetValue(record, "Posts_Per_Week")),
       preferredWeekdays: splitList(readSheetValue(record, "Preferred_Weekdays")), preferredTimes: splitList(readSheetValue(record, "Preferred_Times")),
       minimumGapHours: asNumber(readSheetValue(record, "Minimum_Gap_Hours")), priority: asNumber(readSheetValue(record, "Priority")),
+      channelAccountId: readSheetValue(record, "Channel_Account_ID"),
+      weeklyMax: readSheetValue(record, "Weekly_Max") ? Number(readSheetValue(record, "Weekly_Max")) : null,
+      validFrom: readSheetValue(record, "Valid_From"), validTo: readSheetValue(record, "Valid_To"),
       active: asBoolean(readSheetValue(record, "Active")),
     }] : [];
   });
@@ -463,11 +469,16 @@ function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadshee
     const date = readSheetValue(record, "Date");
     return date ? [{ date, name: readSheetValue(record, "Name"), appliesTo: readSheetValue(record, "Applies_To") || "ALL", active: asBoolean(readSheetValue(record, "Active")) }] : [];
   });
+  const channels: ChannelAccount[] = (tabs.get(CHANNELS_TAB) ?? []).flatMap((record) => {
+    const channelAccountId = readSheetValue(record, "Channel_Account_ID");
+    const optionalNumber = (key: string) => readSheetValue(record, key) ? Number(readSheetValue(record, key)) : null;
+    return channelAccountId ? [{ channelAccountId, platform: readSheetValue(record, "Platform"), accountName: readSheetValue(record, "Account_Name"), publicUrl: readSheetValue(record, "Public_URL"), timezone: readSheetValue(record, "Timezone"), weeklyMax: optionalNumber("Account_Weekly_Max"), minimumGapMinutes: optionalNumber("Account_Minimum_Gap_Minutes"), active: asBoolean(readSheetValue(record, "Active")) }] : [];
+  });
   if (!settings.some((item) => item.active)) warnings.push("Production settings faol emas");
   if (!workflow.some((item) => item.active)) warnings.push("Content workflow faol emas");
   if (!publishingRules.some((item) => item.active)) warnings.push("Publishing rules faol emas");
   return {
-    items, contentNodes, tools, taskOverrides, settings, team, workflow, publishingRules, holidays,
+    items, contentNodes, tools, taskOverrides, settings, team, workflow, publishingRules, holidays, channels,
     canonicalProblems: canonicalProblemsFrom(tabs.get(CANONICAL_TAB) ?? []),
     contentClusters: tabs.get(CONTENT_CLUSTER_TAB) ?? [],
     meta: { loadedAt: new Date().toISOString(), spreadsheetId, warnings },
@@ -498,10 +509,12 @@ export async function loadProductionDataset(force = false) {
   const requirements: Array<[string, string]> = [
     [CONTENT_NODES_TAB, "Node_ID"], [TOOLS_TAB, "Tool_ID"], [PRODUCTION_TAB, "Production_ID"], [SETTINGS_TAB, "Setting_Key"],
     [TEAM_TAB, "Employee_ID"], [WORKFLOW_TAB, "Stage_ID"], [PUBLISHING_TAB, "Rule_ID"],
-    [HOLIDAYS_TAB, "Date"], [TASKS_TAB, "Task_ID"], [CANONICAL_TAB, "Canonical_Problem_ID"], [CONTENT_CLUSTER_TAB, "Cluster_ID"],
+    [HOLIDAYS_TAB, "Date"], [TASKS_TAB, "Task_ID"], [CANONICAL_TAB, "Canonical_Problem_ID"], [CONTENT_CLUSTER_TAB, "Cluster_ID"], [CHANNELS_TAB, "Channel_Account_ID"],
   ];
   const { records } = await fetchTabs(spreadsheetId, requirements);
   const dataset = normalizeProductionDataset(records, spreadsheetId);
+  const errors = validatePlanningConfig(dataset);
+  if (errors.length) throw new Error(`Sozlama xatosi: ${errors.join("; ")}`);
   productionCache = { value: dataset, expiresAt: Date.now() + CACHE_MS };
   return dataset;
 }

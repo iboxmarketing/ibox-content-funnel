@@ -51,7 +51,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { KnowledgeApiResponse, KnowledgeGraph } from "@/lib/knowledge-types";
-import { recalculateSchedule } from "@/lib/scheduling-engine";
+import { applyScheduleOverrides, recalculateSchedule, type ScheduleOverrides } from "@/lib/scheduling-engine";
 import type { ProductionApiResponse, ProductionDataset } from "@/lib/production-types";
 
 type Filters = {
@@ -73,15 +73,18 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "kanban" | "calendar";
+type MainView = "mindmap" | "kanban" | "calendar" | "settings";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
+
+const ProductionSettings = dynamic(() => import("@/components/production-settings").then((module) => module.ProductionSettings), { ssr: false });
 
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
   { id: "mindmap", label: "Mind Map", icon: Network },
   { id: "kanban", label: "Content Kanban", icon: Columns3 },
   { id: "calendar", label: "Content Calendar", icon: CalendarDays },
+  { id: "settings", label: "Sozlamalar", icon: Settings2 },
 ];
 
 const FUTURE_VIEWS = [
@@ -185,6 +188,8 @@ function LoadingState() {
 }
 
 export function KnowledgeOS() {
+  const [scheduleOverrides, setScheduleOverrides] = useState<ScheduleOverrides>({});
+  const simulation = Object.keys(scheduleOverrides).length > 0;
   const [activeView, setActiveView] = useState<MainView>("mindmap");
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [production, setProduction] = useState<ProductionDataset | null>(null);
@@ -274,7 +279,9 @@ export function KnowledgeOS() {
     return () => window.clearInterval(interval);
   }, [activeView, loadProduction]);
 
-  const productionSchedule = useMemo(() => production ? recalculateSchedule(production) : null, [production]);
+  const baselineSchedule = useMemo(() => production ? recalculateSchedule(production) : null, [production]);
+  const effectiveProduction = useMemo(() => production ? applyScheduleOverrides(production, scheduleOverrides) : null, [production, scheduleOverrides]);
+  const productionSchedule = useMemo(() => effectiveProduction ? simulation ? recalculateSchedule(effectiveProduction) : baselineSchedule : null, [effectiveProduction, simulation, baselineSchedule]);
 
   const processById = useMemo(() => new Map(graph?.processes.map((item) => [item.id, item]) ?? []), [graph]);
   const problemById = useMemo(() => new Map(graph?.problems.map((item) => [item.id, item]) ?? []), [graph]);
@@ -498,15 +505,21 @@ export function KnowledgeOS() {
 
           {syncError && graph && <button type="button" onClick={() => void loadData(true)} className="absolute right-5 top-4 z-30 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
         </main>
-        </> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && productionSchedule ? (
-          <div className="relative h-full min-h-0">
+        </> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            {activeView === "kanban" ? (
-              <ContentKanban dataset={production} schedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
+            <div className={`shrink-0 border-b px-5 py-2 text-sm ${simulation ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
+              {simulation ? "Sinov faol · Kanban va Calendar umumiy hisobdan foydalanmoqda. Sheet o‘zgarmadi." : "TEST rejasi · hisoblangan sanalar prognoz; tasdiqlangan nashr majburiyati emas."}
+              {simulation && <button className="ml-3 font-semibold underline" onClick={() => setScheduleOverrides({})}>Bekor qilish</button>}
+            </div>
+            <div className="min-h-0 flex-1">
+            {activeView === "settings" ? <ProductionSettings dataset={production} baseline={baselineSchedule} schedule={productionSchedule} overrides={scheduleOverrides} onSimulate={setScheduleOverrides} onReset={() => setScheduleOverrides({})} /> : activeView === "kanban" ? (
+              <ContentKanban simulation={simulation} dataset={effectiveProduction} schedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
             ) : (
-              <ContentCalendar dataset={production} baseSchedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
+              <ContentCalendar onSettings={() => setActiveView("settings")} dataset={effectiveProduction} baseSchedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
             )}
-            {syncError && <button type="button" onClick={() => void loadProduction(true)} className="absolute right-5 top-16 z-50 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
+            </div>
+            {syncError && <button type="button" onClick={() => void loadProduction(true)} className="absolute right-5 top-16 z-50 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry <span className="max-w-sm truncate" title={syncError}>{syncError}</span></button>}
           </div>
         ) : syncError ? (
           <div className="flex h-full items-center justify-center bg-slate-50"><div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Production ma’lumotlarini yuklab bo‘lmadi</h2><p className="mt-2 text-sm text-slate-500">{syncError}</p><Button className="mt-4" onClick={() => void loadProduction(true)}>Qayta urinish</Button></div></div>

@@ -94,6 +94,7 @@ function TaskCard({
   assigneeId,
   team,
   saving,
+  readOnly = false,
   onOpen,
   onAssigneeChange,
 }: {
@@ -103,6 +104,7 @@ function TaskCard({
   assigneeId: string;
   team: TeamMember[];
   saving: boolean;
+  readOnly?: boolean;
   onOpen: () => void;
   onAssigneeChange: (assigneeId: string) => void;
 }) {
@@ -110,7 +112,7 @@ function TaskCard({
   const overdue = Boolean(stage.endDate && dateKey(stage.endDate) < dateKey(new Date().toISOString()) && status !== "done");
   return (
     <article
-      draggable={!saving && !stage.locked}
+      draggable={!readOnly && !saving && !stage.locked}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("application/x-ibox-task", JSON.stringify({ taskId: stage.taskId, productionId: item.productionId, stageId: stage.stageId }));
@@ -132,7 +134,7 @@ function TaskCard({
         <label className="block text-[9px] font-bold uppercase tracking-[0.06em] text-slate-400">Assignee</label>
         <select
           value={assigneeId}
-          disabled={saving || stage.locked}
+          disabled={readOnly || saving || stage.locked}
           onClick={(event) => event.stopPropagation()}
           onChange={(event) => onAssigneeChange(event.target.value)}
           className="mt-1 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-medium text-slate-700 outline-none hover:border-slate-300 focus:border-blue-400"
@@ -153,7 +155,7 @@ function TaskCard({
   );
 }
 
-export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSynced }: { dataset: ProductionDataset; schedule: ScheduleResult; onRefresh: () => void; refreshing: boolean; lastSynced: string }) {
+export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSynced, simulation = false }: { simulation?: boolean; dataset: ProductionDataset; schedule: ScheduleResult; onRefresh: () => void; refreshing: boolean; lastSynced: string }) {
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState("priority");
@@ -176,6 +178,7 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
   const activeTeam = useMemo(() => dataset.team.filter((member) => member.active), [dataset.team]);
 
   const persistTask = async (plan: ProductionPlan, stage: ScheduledStage, patch: { status?: ProductionTaskStatus; assigneeId?: string }) => {
+    if (simulation) { setTaskError("Sinov rejimida task saqlanmaydi. Avval sinovni bekor qiling."); return; }
     const previousStatus = taskStatusOverrides[stage.taskId];
     const previousAssignee = taskAssigneeOverrides[stage.taskId];
     if (patch.status) setTaskStatusOverrides((current) => ({ ...current, [stage.taskId]: patch.status! }));
@@ -329,7 +332,7 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
               return <section key={column.id} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => handleTaskDrop(event, column.id)} className="flex h-full w-[310px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-100/70 transition-colors hover:bg-slate-100">
                 <header className="shrink-0 border-b border-slate-200 px-3.5 py-3"><div className="flex items-center justify-between"><div className="flex items-center gap-2">{column.id === "done" ? <CheckCircle2 className="size-4 text-emerald-600" /> : column.id === "blocked" ? <AlertTriangle className="size-4 text-red-600" /> : <CircleDot className={`size-4 ${column.id === "in_progress" ? "text-blue-600" : "text-slate-400"}`} />}<h2 className="text-[12px] font-bold tracking-[0.04em] text-slate-700">{column.label.toUpperCase()}</h2></div><Badge variant="secondary">{cards.length}</Badge></div><p className="mt-1 text-[10px] text-slate-400">{column.description}</p></header>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5 scrollbar-thin">
-                  {visibleCards.map(({ plan, stage }) => <TaskCard key={stage.taskId} plan={plan} stage={stage} status={taskStatusOverrides[stage.taskId] ?? stage.status} assigneeId={taskAssigneeOverrides[stage.taskId] ?? stage.ownerId} team={activeTeam} saving={savingTasks.has(stage.taskId)} onOpen={() => setSelection(plan)} onAssigneeChange={(assigneeId) => void persistTask(plan, stage, { assigneeId })} />)}
+                  {visibleCards.map(({ plan, stage }) => <TaskCard key={stage.taskId} plan={plan} stage={stage} status={taskStatusOverrides[stage.taskId] ?? stage.status} assigneeId={taskAssigneeOverrides[stage.taskId] ?? stage.ownerId} team={activeTeam} readOnly={simulation} saving={savingTasks.has(stage.taskId)} onOpen={() => setSelection(plan)} onAssigneeChange={(assigneeId) => void persistTask(plan, stage, { assigneeId })} />)}
                   {visibleCards.length < cards.length && <Button variant="outline" size="sm" className="w-full bg-white" onClick={() => setColumnLimits((current) => ({ ...current, [`task-${column.id}`]: (current[`task-${column.id}`] ?? 60) + 60 }))}>Yana {Math.min(60, cards.length - visibleCards.length)} ta ko‘rsatish</Button>}
                   {!cards.length && <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 p-5 text-center text-[12px] text-slate-400">Taskni shu yerga olib keling</div>}
                 </div>

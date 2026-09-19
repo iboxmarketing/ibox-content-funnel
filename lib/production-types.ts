@@ -112,6 +112,21 @@ export interface PublishingRule {
   minimumGapHours: number;
   priority: number;
   active: boolean;
+  channelAccountId?: string;
+  weeklyMax?: number | null;
+  validFrom?: string;
+  validTo?: string;
+}
+
+export interface ChannelAccount {
+  channelAccountId: string;
+  platform: string;
+  accountName: string;
+  publicUrl: string;
+  timezone: string;
+  weeklyMax: number | null;
+  minimumGapMinutes: number | null;
+  active: boolean;
 }
 
 export interface ProductionHoliday {
@@ -158,12 +173,14 @@ export interface ProductionDataset {
   workflow: WorkflowStageDefinition[];
   publishingRules: PublishingRule[];
   holidays: ProductionHoliday[];
+  channels?: ChannelAccount[];
   canonicalProblems: CanonicalProblem[];
   contentClusters: SheetRecord[];
   meta: {
     loadedAt: string;
     spreadsheetId: string;
     warnings: string[];
+    sheetIds?: Record<string, number>;
   };
 }
 
@@ -187,6 +204,9 @@ export interface ScheduledStage {
   estimatedHours: number;
   locked: boolean;
   notes: string;
+  startAt?: string;
+  endAt?: string;
+  workSegments?: Array<{ startAt: string; endAt: string }>;
 }
 
 export interface ProductionPlan {
@@ -228,6 +248,7 @@ export interface PublishingSlot {
   startsAt: string;
   locked?: boolean;
   productionId?: string;
+  channelAccountId?: string;
 }
 
 export interface ScheduleResult {

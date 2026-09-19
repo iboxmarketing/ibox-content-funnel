@@ -1,3 +1,4 @@
+import { allocateWork, localDay, parseWorkWindows, wallClock } from "./work-calendar";
 import type {
   ProductionDataset,
   ProductionHoliday,
@@ -19,6 +20,8 @@ const STATUS_ORDER: Record<string, number> = {
 };
 
 export interface ScheduleOverrides {
+  settings?: Record<string, string>;
+  holidays?: ProductionHoliday[];
   postsPerWeek?: Record<string, number>;
   weeklyCapacityHours?: Record<string, number>;
   stageDurations?: Record<string, number>;
@@ -52,20 +55,14 @@ function compareDays(left: string, right: string) {
   return (parseDay(left)?.getTime() ?? 0) - (parseDay(right)?.getTime() ?? 0);
 }
 
-function maxDay(values: string[], fallback: string) {
-  return values.filter(Boolean).reduce((latest, value) => compareDays(value, latest) > 0 ? value : latest, fallback);
-}
-
-function minDay(values: string[], fallback: string) {
-  return values.filter(Boolean).reduce((earliest, value) => compareDays(value, earliest) < 0 ? value : earliest, fallback);
-}
-
 function settingMap(dataset: ProductionDataset) {
   return new Map(dataset.settings.filter((item) => item.active).map((item) => [item.key, item.value]));
 }
 
 function numberSetting(settings: Map<string, string>, key: string, fallback = 0) {
-  const parsed = Number((settings.get(key) ?? "").replace(",", "."));
+  const raw = settings.get(key)?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw.replace(",", "."));
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -89,6 +86,7 @@ function isWorkday(date: Date, workingDays: string[], holidays: ProductionHolida
 }
 
 function moveToWorkday(value: string, direction: 1 | -1, workingDays: string[], holidays: ProductionHoliday[], member?: TeamMember) {
+  if (!workingDays.length) throw new Error("Ish kunlari bo‘sh");
   const date = parseDay(value) ?? new Date();
   let guard = 0;
   while (!isWorkday(date, workingDays, holidays, member) && guard < 370) {
@@ -193,65 +191,62 @@ function durationFor(stage: WorkflowStageDefinition, settings: Map<string, strin
 export function calculateWorkflowDates(item: ProductionItem, dataset: ProductionDataset, planningStart?: string) {
   const settings = settingMap(dataset);
   const definitions = workflowFor(item, dataset.workflow);
-  const defaultDays = defaultWorkingDays(settings);
-  const buffer = numberSetting(settings, "DEFAULT_BUFFER_DAYS", 0);
-  const hoursPerDay = numberSetting(settings, "HOURS_PER_WORKDAY", 8);
-  const overrides = new Map(dataset.taskOverrides.filter((entry) => entry.active && entry.productionId === item.productionId).map((entry) => [entry.stageId, entry]));
-  const members = new Map(definitions.map((stage) => [stage.stageId, memberFor(stage.ownerRole, overrides.get(stage.stageId)?.assigneeId || item.assignee, dataset.team)]));
+  const timezone = settings.get("TIMEZONE") || "Asia/Tashkent";
+  const hours = numberSetting(settings, "HOURS_PER_WORKDAY", 8);
+  const bufferMinutes = Math.round(numberSetting(settings, "DEFAULT_BUFFER_DAYS") * hours * 60);
+  const globalCalendar = normalized(settings.get("GLOBAL_WORK_CALENDAR") || "false") === "true";
+  const overrides = new Map(dataset.taskOverrides.filter((t) => t.active && t.productionId === item.productionId).map((t) => [t.stageId, t]));
+  const ordered: WorkflowStageDefinition[] = [];
+  const visiting = new Set<string>(); const visited = new Set<string>();
+  const visit = (stage: WorkflowStageDefinition) => {
+    if (visiting.has(stage.stageId)) throw new Error(`Workflow dependency cycle: ${stage.stageId}`);
+    if (visited.has(stage.stageId)) return;
+    visiting.add(stage.stageId);
+    for (const id of stage.dependencyStageIds) {
+      const dependency = definitions.find((d) => d.stageId === id);
+      if (!dependency) throw new Error(`Workflow dependency topilmadi: ${id}`);
+      visit(dependency);
+    }
+    visiting.delete(stage.stageId); visited.add(stage.stageId); ordered.push(stage);
+  };
+  definitions.forEach(visit);
+  const backwards = Boolean(item.targetPublishDate);
+  const anchorDay = (backwards ? item.targetPublishDate : item.productionStartDate || planningStart || settings.get("PLANNING_START_DATE") || todayInTimeZone(timezone)).slice(0, 10);
   const schedules = new Map<string, ScheduledStage>();
-
-  if (item.targetPublishDate) {
-    const dependents = new Map<string, string[]>();
-    definitions.forEach((stage) => stage.dependencyStageIds.forEach((dependency) => {
-      dependents.set(dependency, [...(dependents.get(dependency) ?? []), stage.stageId]);
-    }));
-    [...definitions].sort((a, b) => b.stageOrder - a.stageOrder).forEach((stage) => {
-      const member = members.get(stage.stageId);
-      const days = member?.workingDays.length ? member.workingDays : defaultDays;
-      const dependentStarts = (dependents.get(stage.stageId) ?? []).map((id) => schedules.get(id)?.startDate ?? "").filter(Boolean);
-      const boundary = dependentStarts.length ? minDay(dependentStarts, item.targetPublishDate) : item.targetPublishDate;
-      const endDate = dependentStarts.length && buffer > 0 ? subtractWorkdays(boundary, buffer + 1, days, dataset.holidays, member) : moveToWorkday(boundary, -1, days, dataset.holidays, member);
-      const duration = durationFor(stage, settings);
-      const taskOverride = overrides.get(stage.stageId);
-      const startDate = taskOverride?.startDateOverride || subtractWorkdays(endDate, duration, days, dataset.holidays, member);
-      const resolvedEndDate = taskOverride?.deadlineOverride || endDate;
-      schedules.set(stage.stageId, {
-        taskId: `${item.productionId}::${stage.stageId}`, stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
-        ownerId: member?.employeeId ?? "", ownerName: member?.employeeName || stage.ownerRole || "Tayinlanmagan",
-        startDate, endDate: resolvedEndDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
-        status: taskOverride?.status || stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
-        locked: taskOverride?.locked ?? false, notes: taskOverride?.notes ?? "",
-      });
-    });
-  } else {
-    const anchor = item.productionStartDate || planningStart || todayInTimeZone(settings.get("TIMEZONE") || "Asia/Tashkent");
-    definitions.forEach((stage) => {
-      const member = members.get(stage.stageId);
-      const days = member?.workingDays.length ? member.workingDays : defaultDays;
-      const dependencies = stage.dependencyStageIds.map((id) => schedules.get(id)?.endDate ?? "").filter(Boolean);
-      const dependencyBoundary = dependencies.length ? maxDay(dependencies, anchor) : anchor;
-      const bufferedStart = dependencies.length && buffer > 0 ? addWorkdays(dependencyBoundary, buffer + 1, days, dataset.holidays, member) : dependencyBoundary;
-      const startDate = moveToWorkday(bufferedStart, 1, days, dataset.holidays, member);
-      const duration = durationFor(stage, settings);
-      const taskOverride = overrides.get(stage.stageId);
-      const resolvedStartDate = taskOverride?.startDateOverride || startDate;
-      const endDate = taskOverride?.deadlineOverride || addWorkdays(resolvedStartDate, duration, days, dataset.holidays, member);
-      schedules.set(stage.stageId, {
-        taskId: `${item.productionId}::${stage.stageId}`, stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
-        ownerId: member?.employeeId ?? "", ownerName: member?.employeeName || stage.ownerRole || "Tayinlanmagan",
-        startDate: resolvedStartDate, endDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
-        status: taskOverride?.status || stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
-        locked: taskOverride?.locked ?? false, notes: taskOverride?.notes ?? "",
-      });
+  for (const stage of backwards ? [...ordered].reverse() : ordered) {
+    const override = overrides.get(stage.stageId);
+    const member = memberFor(stage.ownerRole, override?.assigneeId || item.assignee, dataset.team);
+    const windows = parseWorkWindows(settings.get("WORK_INTERVALS") || settings.get("DEFAULT_WORK_WINDOWS") || `${member?.workStart || "09:00"}-${member?.workEnd || "18:00"}`);
+    const days = globalCalendar ? defaultWorkingDays(settings) : member?.workingDays.length ? member.workingDays : defaultWorkingDays(settings);
+    const calendar = { timezone, windows, days, holidays: dataset.holidays.filter((h) => holidayApplies(h, member)).map((h) => h.date) };
+    const related = backwards ? ordered.filter((d) => d.dependencyStageIds.includes(stage.stageId)).map((d) => schedules.get(d.stageId)!.startAt!) : stage.dependencyStageIds.map((id) => schedules.get(id)!.endAt!);
+    let boundary = related.length ? (backwards ? Math.min : Math.max)(...related.map(Date.parse)) : wallClock(anchorDay, backwards ? windows.at(-1)!.end : windows[0].start, timezone);
+    if (backwards && !related.length && item.targetPublishDate.includes("T")) boundary = Date.parse(item.targetPublishDate);
+    if (related.length && bufferMinutes) {
+      const gap = allocateWork(boundary, bufferMinutes, calendar, backwards ? -1 : 1);
+      boundary = Date.parse(backwards ? gap.startAt : gap.endAt);
+    }
+    const duration = durationFor(stage, settings);
+    const allocation = allocateWork(boundary, Math.round(duration * hours * 60), calendar, backwards ? -1 : 1);
+    const startDate = override?.startDateOverride || localDay(allocation.startAt, timezone);
+    const endDate = override?.deadlineOverride || localDay(allocation.endAt, timezone);
+    const startAt = override?.startDateOverride ? new Date(wallClock(startDate, windows[0].start, timezone)).toISOString() : allocation.startAt;
+    const endAt = override?.deadlineOverride ? new Date(wallClock(endDate, windows.at(-1)!.end, timezone)).toISOString() : allocation.endAt;
+    schedules.set(stage.stageId, {
+      taskId: `${item.productionId}::${stage.stageId}`, stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
+      ownerId: member?.employeeId ?? "", ownerName: member?.employeeName || stage.ownerRole || "Tayinlanmagan",
+      startDate, endDate, startAt, endAt, workSegments: override?.startDateOverride || override?.deadlineOverride ? undefined : allocation.segments,
+      durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds, status: override?.status || stageStatus(item, stage),
+      capacityWarning: "", estimatedHours: duration * hours, locked: override?.locked ?? false, notes: override?.notes ?? "",
     });
   }
-  return definitions.map((definition) => schedules.get(definition.stageId)).filter((stage): stage is ScheduledStage => Boolean(stage));
+  return definitions.map((d) => schedules.get(d.stageId)!);
 }
 
 export function calculateContentReadyDate(stages: ScheduledStage[]) {
   const productionStages = stages.filter((stage) => !/(ready|schedul|publish)/i.test(`${stage.stageId} ${stage.stageName}`));
-  const values = (productionStages.length ? productionStages : stages).map((stage) => stage.endDate).filter(Boolean);
-  return values.length ? maxDay(values, values[0]) : "";
+  const values = (productionStages.length ? productionStages : stages).map((stage) => stage.endAt || stage.endDate).filter(Boolean);
+  return values.sort((a, b) => Date.parse(b) - Date.parse(a))[0] || "";
 }
 
 function weekKey(value: string) {
@@ -271,6 +266,16 @@ export function calculateRoleCapacity(plans: ProductionPlan[], dataset: Producti
     for (const stage of plan.stages) {
       const member = dataset.team.find((item) => item.employeeId === stage.ownerId);
       if (!member || !stage.startDate || !stage.endDate || stage.durationWorkdays <= 0) continue;
+      if (stage.workSegments) {
+        for (const segment of stage.workSegments) {
+          const week = weekKey(localDay(segment.startAt, settings.get("TIMEZONE") || "Asia/Tashkent"));
+          const key = `${member.employeeId}::${week}`;
+          const group = groups.get(key) ?? { member, week, hours: 0, tasks: new Set<string>() };
+          group.hours += (Date.parse(segment.endAt) - Date.parse(segment.startAt)) / 3_600_000;
+          group.tasks.add(plan.item.productionId); groups.set(key, group);
+        }
+        continue;
+      }
       let date = parseDay(stage.startDate)!;
       const end = parseDay(stage.endDate)!;
       let guard = 0;
@@ -289,7 +294,7 @@ export function calculateRoleCapacity(plans: ProductionPlan[], dataset: Producti
     }
   }
   return Array.from(groups.values()).map(({ member, week, hours, tasks }) => {
-    const utilization = member.weeklyCapacityHours > 0 ? (hours / member.weeklyCapacityHours) * 100 : 0;
+    const utilization = member.weeklyCapacityHours > 0 ? (hours / member.weeklyCapacityHours) * 100 : hours > 0 ? 101 : 0;
     return {
       employeeId: member.employeeId, employeeName: member.employeeName, role: member.role, week,
       scheduledHours: hours, weeklyCapacityHours: member.weeklyCapacityHours, utilization,
@@ -299,42 +304,50 @@ export function calculateRoleCapacity(plans: ProductionPlan[], dataset: Producti
   });
 }
 
-function isoWithTime(day: string, time: string) {
-  return `${day}T${/^\d{2}:\d{2}$/.test(time) ? time : "10:00"}:00+05:00`;
+function isoWithTime(day: string, time: string, timezone = "Asia/Tashkent") {
+  if (day.includes("T")) return new Date(day).toISOString();
+  const [hour, minute] = time.split(":").map(Number);
+  return new Date(wallClock(day, hour * 60 + minute, timezone)).toISOString();
 }
 
-export function generatePublishingSlots(rules: PublishingRule[], startDate: string, endDate: string, occupied: PublishingSlot[] = []) {
+export function slotKey(slot: PublishingSlot) { return `${slot.channelAccountId || slot.platform}::${slot.startsAt}`; }
+
+export function generatePublishingSlots(rules: PublishingRule[], startDate: string, endDate: string, occupied: PublishingSlot[] = [], channels: NonNullable<ProductionDataset["channels"]> = [], timezone = "Asia/Tashkent", globalGapHours = 0) {
   const slots: PublishingSlot[] = [...occupied];
-  for (const rule of rules.filter((item) => item.active && item.postsPerWeek > 0)) {
-    const start = parseDay(startDate)!;
-    const end = parseDay(endDate)!;
-    const candidatesByWeek = new Map<string, string[]>();
-    for (let cursor = new Date(start); cursor <= end; cursor = new Date(cursor.getTime() + DAY_MS)) {
-      const day = formatDay(cursor);
-      if (!rule.preferredWeekdays.map((item) => item.toUpperCase()).includes(WEEKDAY_CODES[cursor.getUTCDay()])) continue;
+  const active = rules.filter((r) => r.active && r.postsPerWeek > 0).sort((a, b) => a.priority - b.priority || a.ruleId.localeCompare(b.ruleId));
+  for (const rule of active) {
+    const channel = channels.find((c) => c.channelAccountId === rule.channelAccountId);
+    if (rule.channelAccountId && !channel?.active) continue;
+    const zone = channel?.timezone || timezone;
+    const account = rule.channelAccountId || rule.platform;
+    const gap = Math.max(globalGapHours * 60, rule.minimumGapHours * 60, channel?.minimumGapMinutes ?? 0) * 60_000;
+    const counts = new Map<string, number>();
+    for (const s of slots.filter((s) => s.ruleId === rule.ruleId)) { const week = weekKey(localDay(s.startsAt, zone)); counts.set(week, (counts.get(week) || 0) + 1); }
+    for (let day = startDate; day <= endDate; day = addCalendarDays(day, 1)) {
+      if ((rule.validFrom && day < rule.validFrom) || (rule.validTo && day > rule.validTo)) continue;
+      if (!rule.preferredWeekdays.includes(WEEKDAY_CODES[parseDay(day)!.getUTCDay()])) continue;
       const week = weekKey(day);
-      const candidates = candidatesByWeek.get(week) ?? [];
-      for (const time of rule.preferredTimes.length ? rule.preferredTimes : ["10:00"]) candidates.push(isoWithTime(day, time));
-      candidatesByWeek.set(week, candidates);
-    }
-    for (const candidates of candidatesByWeek.values()) {
-      const chosen: string[] = [];
-      for (const candidate of candidates.sort()) {
-        if (chosen.length >= rule.postsPerWeek) break;
-        const candidateMs = new Date(candidate).getTime();
-        if (chosen.every((value) => Math.abs(candidateMs - new Date(value).getTime()) >= rule.minimumGapHours * 3_600_000)) chosen.push(candidate);
+      for (const time of [...rule.preferredTimes].sort()) {
+        if ((counts.get(week) || 0) >= Math.min(rule.postsPerWeek, rule.weeklyMax ?? Infinity)) break;
+        const startsAt = isoWithTime(day, time, zone); const instant = Date.parse(startsAt);
+        const accountSlots = slots.filter((s) => (s.channelAccountId || s.platform) === account);
+        if (channel?.weeklyMax != null && accountSlots.filter((s) => weekKey(localDay(s.startsAt, zone)) === week).length >= channel.weeklyMax) continue;
+        if (accountSlots.some((s) => {
+          const other = rules.find((r) => r.ruleId === s.ruleId);
+          const requiredGap = Math.max(gap, (other?.minimumGapHours ?? 0) * 3_600_000);
+          return Date.parse(s.startsAt) === instant || Math.abs(Date.parse(s.startsAt) - instant) < requiredGap;
+        })) continue;
+        slots.push({ ruleId: rule.ruleId, channelAccountId: rule.channelAccountId, platform: rule.platform, contentType: rule.contentType, language: rule.language, startsAt });
+        counts.set(week, (counts.get(week) || 0) + 1);
       }
-      slots.push(...chosen.map((startsAt) => ({
-        ruleId: rule.ruleId, platform: rule.platform, contentType: rule.contentType, language: rule.language, startsAt,
-      })));
     }
   }
-  return slots.sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+  return slots.sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
 }
 
 export function findNextAvailableSlot(readyDate: string, rule: PublishingRule, slots: PublishingSlot[], occupied: Set<string>) {
-  const ready = parseDay(readyDate)?.getTime() ?? 0;
-  return slots.find((slot) => slot.ruleId === rule.ruleId && !occupied.has(slot.startsAt) && new Date(slot.startsAt).getTime() >= ready) ?? null;
+  const ready = Date.parse(readyDate) || 0;
+  return slots.find((slot) => !slot.locked && slot.ruleId === rule.ruleId && !occupied.has(slotKey(slot)) && Date.parse(slot.startsAt) >= ready) ?? null;
 }
 
 function matchingRule(item: ProductionItem, rules: PublishingRule[]) {
@@ -372,53 +385,50 @@ function unscheduledReason(item: ProductionItem, rule: PublishingRule | undefine
   return "Planning horizon ichida bo‘sh slot yo‘q";
 }
 
+export function applyScheduleOverrides(dataset: ProductionDataset, overrides: ScheduleOverrides = {}): ProductionDataset {
+  const settings = dataset.settings.map((s) => ({ ...s, value: overrides.settings?.[s.key] ?? s.value }));
+  for (const [key, value] of Object.entries(overrides.settings ?? {})) if (!settings.some((s) => s.key === key)) settings.push({ key, value, unit: "", description: "Sinov", active: true });
+  return {
+    ...dataset, settings, holidays: overrides.holidays ?? dataset.holidays,
+    team: dataset.team.map((m) => ({ ...m, weeklyCapacityHours: overrides.weeklyCapacityHours?.[m.employeeId] ?? overrides.weeklyCapacityHours?.[m.role] ?? m.weeklyCapacityHours })),
+    workflow: dataset.workflow.map((s) => ({ ...s, durationWorkdays: overrides.stageDurations?.[s.stageId] ?? s.durationWorkdays })),
+    publishingRules: dataset.publishingRules.map((r) => ({ ...r, postsPerWeek: overrides.postsPerWeek?.[r.ruleId] ?? overrides.postsPerWeek?.[r.platform] ?? r.postsPerWeek })),
+  };
+}
+
 export function recalculateSchedule(dataset: ProductionDataset, overrides: ScheduleOverrides = {}): ScheduleResult {
-  const settings = settingMap(dataset);
+  const cloned = applyScheduleOverrides(dataset, overrides);
+  const settings = settingMap(cloned);
   const timezone = settings.get("TIMEZONE") || "Asia/Tashkent";
   const today = todayInTimeZone(timezone);
+  const planningAnchor = settings.get("PLANNING_START_DATE") || today;
   const horizonDays = numberSetting(settings, "PLANNING_HORIZON_DAYS", 90);
-  const horizonEnd = addCalendarDays(today, horizonDays);
-  const cloned: ProductionDataset = {
-    ...dataset,
-    team: dataset.team.map((member) => ({
-      ...member,
-      weeklyCapacityHours: overrides.weeklyCapacityHours?.[member.employeeId] ?? overrides.weeklyCapacityHours?.[member.role] ?? member.weeklyCapacityHours,
-    })),
-    workflow: dataset.workflow.map((stage) => ({
-      ...stage,
-      durationWorkdays: overrides.stageDurations?.[stage.stageId] ?? stage.durationWorkdays,
-    })),
-    publishingRules: dataset.publishingRules.map((rule) => ({
-      ...rule,
-      postsPerWeek: overrides.postsPerWeek?.[rule.ruleId] ?? overrides.postsPerWeek?.[rule.platform] ?? rule.postsPerWeek,
-    })),
-  };
-
+  const horizonEnd = addCalendarDays(planningAnchor, horizonDays);
   const hoursPerDay = numberSetting(settings, "HOURS_PER_WORKDAY", 8);
   const committedByWeek = new Map<string, number>();
   const orderedItems = [...cloned.items].sort((a, b) => priorityRank(a.priorityBand) - priorityRank(b.priorityBand) || b.priorityScore - a.priorityScore || a.productionId.localeCompare(b.productionId));
   let plans: ProductionPlan[] = orderedItems.map((item) => {
-    let planningStart = today;
+    let planningStart = planningAnchor;
     const isEligibleBacklog = /publishable candidate/i.test(item.publishability) && normalized(item.productionStatus) === "backlog" && !item.targetPublishDate;
     if (isEligibleBacklog) {
       const estimates = new Map<string, { member: TeamMember; hours: number }>();
       for (const stage of workflowFor(item, cloned.workflow)) {
         const member = memberFor(stage.ownerRole, item.assignee, cloned.team);
-        if (!member || stage.durationWorkdays <= 0) continue;
+        if (!member || durationFor(stage, settings) <= 0) continue;
         const current = estimates.get(member.employeeId) ?? { member, hours: 0 };
-        current.hours += stage.durationWorkdays * hoursPerDay;
+        current.hours += durationFor(stage, settings) * hoursPerDay;
         estimates.set(member.employeeId, current);
       }
       let weekOffset = 0;
       while (weekOffset < 520) {
-        const week = weekKey(addCalendarDays(today, weekOffset * 7));
+        const week = weekKey(addCalendarDays(planningAnchor, weekOffset * 7));
         const fits = Array.from(estimates.values()).every(({ member, hours }) => (committedByWeek.get(`${member.employeeId}::${week}`) ?? 0) + hours <= member.weeklyCapacityHours);
         if (fits) {
           for (const { member, hours } of estimates.values()) {
             const key = `${member.employeeId}::${week}`;
             committedByWeek.set(key, (committedByWeek.get(key) ?? 0) + hours);
           }
-          planningStart = addCalendarDays(today, weekOffset * 7);
+          planningStart = addCalendarDays(planningAnchor, weekOffset * 7);
           break;
         }
         weekOffset += 1;
@@ -461,10 +471,11 @@ export function recalculateSchedule(dataset: ProductionDataset, overrides: Sched
   const lockedSlots: PublishingSlot[] = plans.flatMap((plan) => {
     const value = plan.item.scheduleLocked && plan.item.targetPublishDate ? plan.item.targetPublishDate : "";
     if (!value) return [];
-    return [{ ruleId: "LOCKED", platform: plan.item.primaryPlatform, contentType: plan.item.primaryContentType, language: plan.item.language, startsAt: isoWithTime(value, "10:00"), locked: true, productionId: plan.item.productionId }];
+    const rule = matchingRule(plan.item, cloned.publishingRules);
+    return [{ ruleId: rule?.ruleId || "LOCKED", channelAccountId: rule?.channelAccountId, platform: plan.item.primaryPlatform, contentType: plan.item.primaryContentType, language: plan.item.language, startsAt: isoWithTime(value, "00:00", timezone), locked: true, productionId: plan.item.productionId }];
   });
-  const slots = generatePublishingSlots(cloned.publishingRules, today, horizonEnd, lockedSlots);
-  const occupied = new Set(lockedSlots.map((slot) => slot.startsAt));
+  const slots = generatePublishingSlots(cloned.publishingRules, planningAnchor, horizonEnd, lockedSlots, cloned.channels, timezone, numberSetting(settings, "MIN_PUBLISH_GAP_HOURS"));
+  const occupied = new Set(lockedSlots.map(slotKey));
   const planById = new Map(plans.map((plan) => [plan.item.productionId, plan]));
   const candidates = plans.filter((plan) => !plan.item.scheduleLocked && /publishable candidate/i.test(plan.item.publishability) && normalized(plan.item.productionStatus) !== "published")
     .sort((a, b) => priorityRank(a.item.priorityBand) - priorityRank(b.item.priorityBand)
@@ -481,18 +492,18 @@ export function recalculateSchedule(dataset: ProductionDataset, overrides: Sched
     const last = recent.slice(-lookback);
     const chosen = [...pool].sort((a, b) => {
       const penalty = (plan: ProductionPlan) => last.reduce((score, previous) => score + (previous.clusterId === plan.item.clusterId ? 3 : 0) + (previous.funnelStage === plan.item.funnelStage ? 1 : 0) + (previous.nodeRole === plan.item.nodeRole ? 1 : 0), 0);
-      return penalty(a) - penalty(b) || priorityRank(a.item.priorityBand) - priorityRank(b.item.priorityBand) || b.item.priorityScore - a.item.priorityScore;
+      return priorityRank(a.item.priorityBand) - priorityRank(b.item.priorityBand) || penalty(a) - penalty(b) || b.item.priorityScore - a.item.priorityScore;
     })[0];
     unscheduled.delete(chosen.item.productionId);
     const rule = matchingRule(chosen.item, cloned.publishingRules);
     let readyDate = chosen.earliestPossiblePublishDate;
-    if (/^ru$/i.test(chosen.item.language)) readyDate = addCalendarDays(readyDate, numberSetting(settings, "LOCALIZATION_RU_DELAY_DAYS", 0));
-    if (/^en$/i.test(chosen.item.language)) readyDate = addCalendarDays(readyDate, numberSetting(settings, "LOCALIZATION_EN_DELAY_DAYS", 0));
+    const delay = numberSetting(settings, "PUBLISH_BUFFER_DAYS") + (/^ru$/i.test(chosen.item.language) ? numberSetting(settings, "LOCALIZATION_RU_DELAY_DAYS") : /^en$/i.test(chosen.item.language) ? numberSetting(settings, "LOCALIZATION_EN_DELAY_DAYS") : 0);
+    if (delay > 0) readyDate = allocateWork(Date.parse(readyDate), Math.round(delay * hoursPerDay * 60), { timezone, days: defaultWorkingDays(settings), windows: parseWorkWindows(settings.get("WORK_INTERVALS") || settings.get("DEFAULT_WORK_WINDOWS") || "09:00-18:00"), holidays: cloned.holidays.filter((h) => holidayApplies(h)).map((h) => h.date) }).endAt;
     const blockedLocalization = /^(ru|en)$/i.test(chosen.item.language) && !/approved/i.test(chosen.item.contentApprovalStatus);
     const slot = rule && !blockedLocalization ? findNextAvailableSlot(readyDate, rule, slots, occupied) : null;
     const plan = planById.get(chosen.item.productionId)!;
     if (slot) {
-      occupied.add(slot.startsAt);
+      occupied.add(slotKey(slot));
       slot.productionId = chosen.item.productionId;
       plan.recommendedPublishDate = slot.startsAt;
       plan.scheduledPublishDate = slot.startsAt;
