@@ -10,9 +10,9 @@ import type { ProductionDataset, ProductionPlan } from "@/lib/production-types";
 function Field({ label, value, mono = false }: { label: string; value: string | number; mono?: boolean }) {
   if (value === "" || value === null || value === undefined) return null;
   return (
-    <div className="grid gap-1 border-b border-slate-100 py-3 last:border-0 sm:grid-cols-[148px_1fr] sm:gap-4">
-      <dt className="text-[12px] font-bold uppercase tracking-[0.06em] text-slate-400">{label}</dt>
-      <dd className={`text-[14px] leading-6 text-slate-800 ${mono ? "font-mono font-semibold" : ""}`}>{value}</dd>
+    <div className="grid gap-1.5 border-b border-slate-100 py-3.5 last:border-0 sm:grid-cols-[160px_1fr] sm:gap-5">
+      <dt className="text-[12px] font-bold uppercase tracking-[0.055em] text-slate-500">{label}</dt>
+      <dd className={`break-words text-[14px] leading-6 text-slate-900 ${mono ? "font-mono font-semibold" : ""}`}>{value}</dd>
     </div>
   );
 }
@@ -32,16 +32,16 @@ export function ProductionDrawer({ plan, dataset, onClose }: { plan: ProductionP
   const tool = item.toolId ? dataset.tools.find((entry) => entry.toolId === item.toolId) : null;
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-full gap-0 border-slate-200 bg-white p-0 sm:max-w-[660px]">
-        <SheetHeader className="border-b border-slate-200 px-6 pb-5 pt-6">
+      <SheetContent className="w-full max-w-full gap-0 overflow-hidden border-slate-200 bg-white p-0 sm:max-w-[660px]">
+        <SheetHeader className="border-b border-slate-200 bg-white px-6 pb-5 pt-6">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <Badge variant="outline" className="font-mono">{item.productionId}</Badge>
-            <Badge className="bg-blue-50 text-blue-700" variant="secondary">{item.priorityBand}</Badge>
-            <Badge variant="outline">{item.productionStatus}</Badge>
+            <Badge variant="outline" className="border-slate-300 bg-white font-mono font-semibold text-slate-700">{item.productionId}</Badge>
+            <Badge className="border border-blue-200 bg-blue-50 font-semibold text-blue-700" variant="secondary">{item.priorityBand}</Badge>
+            <Badge variant="outline" className="border-slate-300 bg-slate-50 font-semibold text-slate-700">{item.productionStatus}</Badge>
             {item.scheduleLocked && <Badge variant="outline" className="gap-1 border-amber-200 bg-amber-50 text-amber-700"><Lock className="size-3" /> Locked</Badge>}
           </div>
-          <SheetTitle className="pr-8 text-xl leading-7 text-slate-950">{item.workingTitle}</SheetTitle>
-          <SheetDescription>{item.primaryContentType} · {item.primaryPlatform} · {item.language}</SheetDescription>
+          <SheetTitle className="break-words pr-10 text-xl leading-7 text-slate-950">{item.workingTitle}</SheetTitle>
+          <SheetDescription className="text-slate-600">{item.primaryContentType} · {item.primaryPlatform} · {item.language}</SheetDescription>
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
           <div className="px-6 py-5">

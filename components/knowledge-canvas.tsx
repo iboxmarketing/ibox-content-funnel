@@ -25,7 +25,7 @@ const PROCESS_W = 306;
 const PROBLEM_W = 314;
 const AREA_H = 116;
 const STAGE_H = 94;
-const PROCESS_H = 120;
+const PROCESS_H = 132;
 const PROBLEM_H = 94;
 const COL_X = [70, 410, 790, 1180];
 const V_GAP = 24;
@@ -282,7 +282,7 @@ const GraphNode = memo(function GraphNode({
         data-node
         type="button"
         onClick={() => onProcessSelect(item.id)}
-        className={`absolute cursor-pointer rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_3px_12px_rgba(16,24,40,.05)] transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-[0_8px_24px_rgba(16,24,40,.09)] ${highlightClass}`}
+        className={`absolute flex cursor-pointer flex-col rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_3px_12px_rgba(16,24,40,.05)] transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-[0_8px_24px_rgba(16,24,40,.09)] ${highlightClass}`}
         style={commonStyle}
       >
         <div className="flex items-start justify-between gap-3">
@@ -296,9 +296,9 @@ const GraphNode = memo(function GraphNode({
             onClick={(event) => { event.stopPropagation(); onProcessToggle(item.id); }}
           />
         </div>
-        <div className="mt-3 flex items-center justify-between gap-3 text-[12px] text-slate-500">
-          <span className="truncate">{item.masul || "Mas’ul ko‘rsatilmagan"}</span>
-          <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 font-semibold text-slate-700">{problemCount} muammo</span>
+        <div className="mt-auto flex items-center justify-between gap-3 border-t border-slate-100 pt-2.5 text-[12px] text-slate-600">
+          <span className="truncate font-medium">{item.masul || "Mas’ul ko‘rsatilmagan"}</span>
+          <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">{problemCount} muammo</span>
         </div>
       </button>
     );

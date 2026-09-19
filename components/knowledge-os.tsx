@@ -127,7 +127,7 @@ function FilterSelect({ value, onValueChange, label, options, className = "" }: 
   const active = value !== "all";
   return (
     <Select value={value} onValueChange={(next) => onValueChange(next ?? "all")}>
-      <SelectTrigger size="sm" className={`h-10 min-w-[132px] cursor-pointer rounded-xl px-3 shadow-none transition-colors data-[state=open]:border-blue-300 data-[state=open]:ring-2 data-[state=open]:ring-blue-100 ${active ? "border-blue-200 bg-blue-50/80 font-semibold text-blue-700 hover:bg-blue-50" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"} ${className}`} aria-label={label}>
+      <SelectTrigger size="sm" className={`h-10 min-w-[132px] cursor-pointer rounded-xl px-3 font-medium shadow-none transition-colors data-[state=open]:border-blue-300 data-[state=open]:ring-2 data-[state=open]:ring-blue-100 ${active ? "border-blue-200 bg-blue-50 font-semibold text-blue-700 hover:bg-blue-100" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50/50"} ${className}`} aria-label={label}>
         <SelectValue placeholder={label}><span className="flex min-w-0 items-center gap-2">{active && <span className="size-1.5 shrink-0 rounded-full bg-blue-600" />}<span className="truncate">{value === "all" ? label : selected?.label ?? value}</span></span></SelectValue>
       </SelectTrigger>
       <SelectContent align="start">
@@ -144,7 +144,7 @@ function FilterSelect({ value, onValueChange, label, options, className = "" }: 
 function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; spreadsheetIdConfigured: boolean }) {
   const variables = [
     { key: "GOOGLE_SHEET_ID", description: "Google Sheet identifikatori", ready: spreadsheetIdConfigured },
-    { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", description: "Viewer sifatida ulashiladigan service-account email", ready: !missing.includes("GOOGLE_SERVICE_ACCOUNT_EMAIL") },
+    { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", description: "Editor sifatida ulashiladigan service-account email", ready: !missing.includes("GOOGLE_SERVICE_ACCOUNT_EMAIL") },
     { key: "GOOGLE_PRIVATE_KEY", description: "Service account private key; secret sifatida saqlanadi", ready: !missing.includes("GOOGLE_PRIVATE_KEY") },
   ];
   return (
@@ -153,7 +153,7 @@ function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; s
         <div className="flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Settings2 className="size-6" /></div>
         <Badge variant="outline" className="mt-5 border-amber-200 bg-amber-50 text-amber-700">Google Sheets ulanishi kutilmoqda</Badge>
         <h2 className="mt-3 text-2xl font-bold tracking-[-0.03em] text-slate-950">Tizimni ishga tushirish uchun {missing.length} ta qiymat yetishmayapti</h2>
-        <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Viewer</strong> sifatida ulashilgach, sayt ma’lumotlarni faqat serverda o‘qiydi. Maxfiy kalit brauzerga yuborilmaydi.</p>
+        <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Editor</strong> sifatida ulashilgach, sayt ma’lumotlarni serverda o‘qiydi va Kanban task o‘zgarishlarini xavfsiz saqlaydi. Maxfiy kalit brauzerga yuborilmaydi.</p>
         <div className="mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200">
           {variables.map((variable) => (
             <div key={variable.key} className="flex items-start gap-3 p-4">
@@ -165,7 +165,7 @@ function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; s
             </div>
           ))}
         </div>
-        <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-[13px] leading-5 text-slate-600"><strong>Keyingi qadam:</strong> service-account emailni Google Sheet’ga Viewer qilib qo‘shing va yuqoridagi qiymatlarni Site environment variables bo‘limiga kiriting. Ulanishdan keyin xarita avtomatik yangilanadi.</div>
+        <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-[13px] leading-5 text-slate-600"><strong>Keyingi qadam:</strong> service-account emailni Google Sheet’ga Editor qilib qo‘shing va yuqoridagi qiymatlarni Site environment variables bo‘limiga kiriting. Ulanishdan keyin xarita avtomatik yangilanadi.</div>
       </div>
     </div>
   );
@@ -437,7 +437,7 @@ export function KnowledgeOS() {
           <div className="hidden min-w-[210px] lg:block"><h1 className="text-[16px] font-bold tracking-[-0.02em] text-slate-950">IBOX Business Knowledge OS</h1><p className="mt-0.5 text-[11px] text-slate-500">Jarayonlar va muammolar xaritasi</p></div>
           <div className="relative min-w-0 flex-1 max-w-[560px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-            <Input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) focusNode(searchResults[0]); }} className="h-10 rounded-xl border-slate-200 bg-white pl-9 pr-16 text-[14px] shadow-none hover:border-slate-300 focus-visible:border-blue-400 focus-visible:ring-blue-100" placeholder="Jarayon, muammo yoki ID bo‘yicha qidiring…" aria-label="Global qidiruv" />
+            <Input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) focusNode(searchResults[0]); }} className="h-10 rounded-xl border-slate-200 bg-slate-50/70 pl-9 pr-16 text-[14px] text-slate-900 shadow-none placeholder:text-slate-400 hover:border-blue-200 hover:bg-white focus-visible:border-blue-400 focus-visible:bg-white focus-visible:ring-blue-100" placeholder="Jarayon, muammo yoki ID bo‘yicha qidiring…" aria-label="Global qidiruv" />
             <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 sm:block">Enter</kbd>
             {searchOpen && normalized(searchQuery).length >= 2 && (
               <div className="absolute left-0 right-0 top-[46px] z-40 max-h-[420px] overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(16,24,40,.16)]">

@@ -2,6 +2,8 @@
 @import "tw-animate-css";
 @import "../vendor/shadcn-tailwind-4.13.0.css";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @utility scrollbar-thin {
   scrollbar-width: thin;
 }
@@ -19,6 +21,7 @@
 }
 
 :root {
+  color-scheme: light;
   --background: #f4f7fb;
   --foreground: #101828;
   --card: #ffffff;
@@ -94,42 +97,6 @@
     "Liberation Mono", "Courier New", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a1220;
-    --foreground: #f3f7ff;
-    --card: #111d30;
-    --card-foreground: #f3f7ff;
-    --popover: #111d30;
-    --popover-foreground: #f3f7ff;
-    --primary: #4f7df3;
-    --primary-foreground: #ffffff;
-    --secondary: #172846;
-    --secondary-foreground: #dbe7ff;
-    --muted: #172338;
-    --muted-foreground: #98a8c0;
-    --accent: #19325e;
-    --accent-foreground: #ffffff;
-    --destructive: #ff6467;
-    --border: #24344d;
-    --input: #30415d;
-    --ring: #6f96ff;
-    --chart-1: #5b8cff;
-    --chart-2: #30bc83;
-    --chart-3: #ff9f50;
-    --chart-4: #9b7bd9;
-    --chart-5: #94a3b8;
-    --sidebar: #050f20;
-    --sidebar-foreground: #edf3ff;
-    --sidebar-primary: #4f7df3;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #10274d;
-    --sidebar-accent-foreground: #ffffff;
-    --sidebar-border: #1d3964;
-    --sidebar-ring: #6f96ff;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
@@ -142,3 +109,30 @@ body {
 button, input { font: inherit; }
 
 ::selection { background: #cfe0ff; color: #082f87; }
+
+/* IBOX Knowledge OS is intentionally a light operational workspace. */
+[data-slot="sheet-overlay"] {
+  background: rgb(15 23 42 / 16%);
+}
+
+[data-slot="sheet-content"] > button:last-child {
+  top: 1.25rem;
+  right: 1.25rem;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dfe5ee;
+  border-radius: 0.625rem;
+  background: #ffffff;
+  color: #475569;
+  opacity: 1;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 8%);
+}
+
+[data-slot="sheet-content"] > button:last-child:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}

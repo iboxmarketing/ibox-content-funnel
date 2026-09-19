@@ -119,13 +119,13 @@ function TaskCard({
     >
       <button type="button" onClick={onOpen} className="block w-full text-left">
         <div className="flex items-center gap-2">
-          <GripVertical className="size-4 shrink-0 text-slate-300 transition group-hover:text-blue-500" />
+          <GripVertical className="size-4 shrink-0 text-slate-400 transition group-hover:text-blue-600" />
           <Badge variant="outline" className={`h-5 px-1.5 text-[10px] ${priorityTone(item.priorityBand)}`}>{item.priorityBand}</Badge>
-          <Badge variant="secondary" className="h-5 max-w-[125px] truncate px-1.5 text-[9px] text-slate-700">{stage.stageName}</Badge>
+          <Badge variant="outline" className="h-5 max-w-[125px] truncate border-blue-200 bg-blue-50 px-1.5 text-[10px] font-semibold text-blue-700">{stage.stageName}</Badge>
           {saving && <Loader2 className="ml-auto size-3.5 animate-spin text-blue-600" />}
         </div>
         <h3 className="mt-2 line-clamp-2 text-[13px] font-semibold leading-[18px] text-slate-900">{item.workingTitle}</h3>
-        <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[9px] text-slate-400"><span>{stage.taskId}</span><span>{item.nodeId}</span></div>
+        <div className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-slate-500"><span className="truncate">{stage.taskId}</span><span className="shrink-0">{item.nodeId}</span></div>
       </button>
 
       <div className="mt-3 border-t border-slate-100 pt-2.5">

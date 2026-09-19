@@ -10,9 +10,9 @@ import type { CanonicalProblem, KnowledgeGraph, KnowledgeProblem, KnowledgeProce
 function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   if (!value) return null;
   return (
-    <div className="grid gap-1 border-b border-slate-100 py-3 last:border-0 sm:grid-cols-[148px_1fr] sm:gap-4">
-      <dt className="text-[12px] font-bold uppercase tracking-[0.06em] text-slate-400">{label}</dt>
-      <dd className={`text-[14px] leading-6 text-slate-800 ${mono ? "font-mono font-semibold" : ""}`}>{value}</dd>
+    <div className="grid gap-1.5 border-b border-slate-100 py-3.5 last:border-0 sm:grid-cols-[160px_1fr] sm:gap-5">
+      <dt className="text-[12px] font-bold uppercase tracking-[0.055em] text-slate-500">{label}</dt>
+      <dd className={`break-words text-[14px] leading-6 text-slate-900 ${mono ? "font-mono font-semibold" : ""}`}>{value}</dd>
     </div>
   );
 }
@@ -34,13 +34,13 @@ function ProcessDetails({ process, graph, onProblemSelect }: { process: Knowledg
   const area = graph.areas.find((item) => item.id === process.areaId);
   return (
     <>
-      <SheetHeader className="border-b border-slate-200 px-6 pb-5 pt-6">
+      <SheetHeader className="border-b border-slate-200 bg-white px-6 pb-5 pt-6">
         <div className="mb-2 flex items-center gap-2">
           <Badge variant="outline" className="font-mono" style={{ borderColor: `${area?.color}55`, color: area?.color }}>{process.jarayonId}</Badge>
           <Badge variant="secondary">Jarayon</Badge>
         </div>
-        <SheetTitle className="pr-8 text-xl leading-7 text-slate-950">{process.kichikJarayon || "Nomsiz jarayon"}</SheetTitle>
-        <SheetDescription>{area?.name} · {process.bosqich || process.jarayonGuruhi}</SheetDescription>
+        <SheetTitle className="break-words pr-10 text-xl leading-7 text-slate-950">{process.kichikJarayon || "Nomsiz jarayon"}</SheetTitle>
+        <SheetDescription className="text-slate-600">{area?.name} · {process.bosqich || process.jarayonGuruhi}</SheetDescription>
       </SheetHeader>
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-6 py-5">
@@ -108,18 +108,18 @@ function ProblemDetails({ problem, graph, onProcessSelect }: { problem: Knowledg
   const canonical = graph.canonicalProblems.find((item) => item.id === problem.canonicalProblemId);
   return (
     <>
-      <SheetHeader className="border-b border-slate-200 px-6 pb-5 pt-6">
+      <SheetHeader className="border-b border-slate-200 bg-white px-6 pb-5 pt-6">
         <div className="mb-2 flex items-center gap-2">
           <Badge variant="outline" className="font-mono" style={{ borderColor: `${area?.color}55`, color: area?.color }}>{problem.muammoId}</Badge>
           <PriorityBadge value={problem.ustuvorlik} />
         </div>
-        <SheetTitle className="pr-8 text-xl leading-7 text-slate-950">{problem.muammo || "Nomsiz muammo"}</SheetTitle>
-        <SheetDescription>{area?.name}{process ? ` · ${process.kichikJarayon}` : ""}</SheetDescription>
+        <SheetTitle className="break-words pr-10 text-xl leading-7 text-slate-950">{problem.muammo || "Nomsiz muammo"}</SheetTitle>
+        <SheetDescription className="text-slate-600">{area?.name}{process ? ` · ${process.kichikJarayon}` : ""}</SheetDescription>
       </SheetHeader>
       <ScrollArea className="min-h-0 flex-1">
         <div className="px-6 py-5">
           {process && (
-            <Button variant="outline" className="mb-5 w-full justify-between" onClick={() => onProcessSelect(process.id)}>
+            <Button variant="outline" className="mb-5 h-auto min-h-10 w-full justify-between whitespace-normal border-blue-200 bg-blue-50 px-3 py-2.5 text-left text-blue-800 shadow-none hover:border-blue-300 hover:bg-blue-100 hover:text-blue-900" onClick={() => onProcessSelect(process.id)}>
               <span className="truncate">Jarayon: {process.jarayonId} · {process.kichikJarayon}</span><ArrowRight className="size-4" />
             </Button>
           )}
@@ -167,7 +167,7 @@ export function KnowledgeDrawer({
   const problem = selection?.type === "problem" ? graph.problems.find((item) => item.id === selection.id) : null;
   return (
     <Sheet open={Boolean(selection)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-full gap-0 border-slate-200 bg-white p-0 sm:max-w-[600px]">
+      <SheetContent className="w-full max-w-full gap-0 overflow-hidden border-slate-200 bg-white p-0 sm:max-w-[600px]">
         {process && <ProcessDetails process={process} graph={graph} onProblemSelect={onProblemSelect} />}
         {problem && <ProblemDetails problem={problem} graph={graph} onProcessSelect={onProcessSelect} />}
       </SheetContent>
