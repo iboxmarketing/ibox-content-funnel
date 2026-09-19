@@ -196,7 +196,8 @@ export function calculateWorkflowDates(item: ProductionItem, dataset: Production
   const defaultDays = defaultWorkingDays(settings);
   const buffer = numberSetting(settings, "DEFAULT_BUFFER_DAYS", 0);
   const hoursPerDay = numberSetting(settings, "HOURS_PER_WORKDAY", 8);
-  const members = new Map(definitions.map((stage) => [stage.stageId, memberFor(stage.ownerRole, item.assignee, dataset.team)]));
+  const overrides = new Map(dataset.taskOverrides.filter((entry) => entry.active && entry.productionId === item.productionId).map((entry) => [entry.stageId, entry]));
+  const members = new Map(definitions.map((stage) => [stage.stageId, memberFor(stage.ownerRole, overrides.get(stage.stageId)?.assigneeId || item.assignee, dataset.team)]));
   const schedules = new Map<string, ScheduledStage>();
 
   if (item.targetPublishDate) {
@@ -211,12 +212,15 @@ export function calculateWorkflowDates(item: ProductionItem, dataset: Production
       const boundary = dependentStarts.length ? minDay(dependentStarts, item.targetPublishDate) : item.targetPublishDate;
       const endDate = dependentStarts.length && buffer > 0 ? subtractWorkdays(boundary, buffer + 1, days, dataset.holidays, member) : moveToWorkday(boundary, -1, days, dataset.holidays, member);
       const duration = durationFor(stage, settings);
-      const startDate = subtractWorkdays(endDate, duration, days, dataset.holidays, member);
+      const taskOverride = overrides.get(stage.stageId);
+      const startDate = taskOverride?.startDateOverride || subtractWorkdays(endDate, duration, days, dataset.holidays, member);
+      const resolvedEndDate = taskOverride?.deadlineOverride || endDate;
       schedules.set(stage.stageId, {
-        stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
+        taskId: `${item.productionId}::${stage.stageId}`, stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
         ownerId: member?.employeeId ?? "", ownerName: member?.employeeName || stage.ownerRole || "Tayinlanmagan",
-        startDate, endDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
-        status: stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
+        startDate, endDate: resolvedEndDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
+        status: taskOverride?.status || stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
+        locked: taskOverride?.locked ?? false, notes: taskOverride?.notes ?? "",
       });
     });
   } else {
@@ -229,12 +233,15 @@ export function calculateWorkflowDates(item: ProductionItem, dataset: Production
       const bufferedStart = dependencies.length && buffer > 0 ? addWorkdays(dependencyBoundary, buffer + 1, days, dataset.holidays, member) : dependencyBoundary;
       const startDate = moveToWorkday(bufferedStart, 1, days, dataset.holidays, member);
       const duration = durationFor(stage, settings);
-      const endDate = addWorkdays(startDate, duration, days, dataset.holidays, member);
+      const taskOverride = overrides.get(stage.stageId);
+      const resolvedStartDate = taskOverride?.startDateOverride || startDate;
+      const endDate = taskOverride?.deadlineOverride || addWorkdays(resolvedStartDate, duration, days, dataset.holidays, member);
       schedules.set(stage.stageId, {
-        stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
+        taskId: `${item.productionId}::${stage.stageId}`, stageId: stage.stageId, stageName: stage.stageName, ownerRole: stage.ownerRole,
         ownerId: member?.employeeId ?? "", ownerName: member?.employeeName || stage.ownerRole || "Tayinlanmagan",
-        startDate, endDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
-        status: stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
+        startDate: resolvedStartDate, endDate, durationWorkdays: duration, dependencyStageIds: stage.dependencyStageIds,
+        status: taskOverride?.status || stageStatus(item, stage), capacityWarning: "", estimatedHours: duration * hoursPerDay,
+        locked: taskOverride?.locked ?? false, notes: taskOverride?.notes ?? "",
       });
     });
   }

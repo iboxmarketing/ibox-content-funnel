@@ -1,6 +1,7 @@
 import type { CanonicalProblem, SheetRecord } from "./knowledge-types";
 
 export type PriorityBand = "P0" | "P1" | "P2" | "P3" | string;
+export type ProductionTaskStatus = "pending" | "in_progress" | "blocked" | "done";
 
 export interface ContentNode {
   nodeId: string;
@@ -120,9 +121,38 @@ export interface ProductionHoliday {
   active: boolean;
 }
 
+export interface ProductionTool {
+  toolId: string;
+  clusterId: string;
+  toolName: string;
+  toolType: string;
+  primaryUseCase: string;
+  status: string;
+  priorityBand: PriorityBand;
+  primarySegment: string;
+  sourceRecord: SheetRecord;
+}
+
+export interface ProductionTaskOverride {
+  taskId: string;
+  productionId: string;
+  stageId: string;
+  status: ProductionTaskStatus | "";
+  assigneeId: string;
+  startDateOverride: string;
+  deadlineOverride: string;
+  locked: boolean;
+  notes: string;
+  updatedAt: string;
+  active: boolean;
+  sourceRecord: SheetRecord;
+}
+
 export interface ProductionDataset {
   items: ProductionItem[];
   contentNodes: ContentNode[];
+  tools: ProductionTool[];
+  taskOverrides: ProductionTaskOverride[];
   settings: ProductionSetting[];
   team: TeamMember[];
   workflow: WorkflowStageDefinition[];
@@ -142,6 +172,7 @@ export type ProductionApiResponse =
   | { configured: false; missing: string[]; spreadsheetIdConfigured: boolean };
 
 export interface ScheduledStage {
+  taskId: string;
   stageId: string;
   stageName: string;
   ownerRole: string;
@@ -154,6 +185,8 @@ export interface ScheduledStage {
   status: "done" | "in_progress" | "pending" | "blocked";
   capacityWarning: string;
   estimatedHours: number;
+  locked: boolean;
+  notes: string;
 }
 
 export interface ProductionPlan {

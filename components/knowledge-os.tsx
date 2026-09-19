@@ -124,10 +124,11 @@ function formatSyncedAt(value: string | null) {
 
 function FilterSelect({ value, onValueChange, label, options, className = "" }: { value: string; onValueChange: (value: string) => void; label: string; options: Array<string | { value: string; label: string }>; className?: string }) {
   const selected = options.map((option) => typeof option === "string" ? { value: option, label: option } : option).find((option) => option.value === value);
+  const active = value !== "all";
   return (
     <Select value={value} onValueChange={(next) => onValueChange(next ?? "all")}>
-      <SelectTrigger size="sm" className={`h-9 min-w-[132px] border-slate-200 bg-white text-slate-700 shadow-none ${className}`} aria-label={label}>
-        <SelectValue placeholder={label}>{value === "all" ? label : selected?.label ?? value}</SelectValue>
+      <SelectTrigger size="sm" className={`h-10 min-w-[132px] cursor-pointer rounded-xl px-3 shadow-none transition-colors data-[state=open]:border-blue-300 data-[state=open]:ring-2 data-[state=open]:ring-blue-100 ${active ? "border-blue-200 bg-blue-50/80 font-semibold text-blue-700 hover:bg-blue-50" : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"} ${className}`} aria-label={label}>
+        <SelectValue placeholder={label}><span className="flex min-w-0 items-center gap-2">{active && <span className="size-1.5 shrink-0 rounded-full bg-blue-600" />}<span className="truncate">{value === "all" ? label : selected?.label ?? value}</span></span></SelectValue>
       </SelectTrigger>
       <SelectContent align="start">
         <SelectItem value="all">Barchasi</SelectItem>
@@ -436,7 +437,7 @@ export function KnowledgeOS() {
           <div className="hidden min-w-[210px] lg:block"><h1 className="text-[16px] font-bold tracking-[-0.02em] text-slate-950">IBOX Business Knowledge OS</h1><p className="mt-0.5 text-[11px] text-slate-500">Jarayonlar va muammolar xaritasi</p></div>
           <div className="relative min-w-0 flex-1 max-w-[560px]">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-            <Input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) focusNode(searchResults[0]); }} className="h-10 rounded-xl border-slate-200 bg-slate-50 pl-9 pr-16 text-[14px] shadow-none focus-visible:bg-white" placeholder="Jarayon, muammo yoki ID bo‘yicha qidiring…" aria-label="Global qidiruv" />
+            <Input value={searchQuery} onChange={(event) => { setSearchQuery(event.target.value); setSearchOpen(true); }} onFocus={() => setSearchOpen(true)} onBlur={() => window.setTimeout(() => setSearchOpen(false), 160)} onKeyDown={(event) => { if (event.key === "Enter" && searchResults[0]) focusNode(searchResults[0]); }} className="h-10 rounded-xl border-slate-200 bg-white pl-9 pr-16 text-[14px] shadow-none hover:border-slate-300 focus-visible:border-blue-400 focus-visible:ring-blue-100" placeholder="Jarayon, muammo yoki ID bo‘yicha qidiring…" aria-label="Global qidiruv" />
             <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-semibold text-slate-400 sm:block">Enter</kbd>
             {searchOpen && normalized(searchQuery).length >= 2 && (
               <div className="absolute left-0 right-0 top-[46px] z-40 max-h-[420px] overflow-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-[0_18px_50px_rgba(16,24,40,.16)]">
@@ -453,16 +454,16 @@ export function KnowledgeOS() {
             <FilterSelect label="Segment" value={filters.segment} onValueChange={(segment) => setFilters((current) => ({ ...current, segment }))} options={filterOptions.segments} />
             <FilterSelect label="Ustuvorlik" value={filters.priority} onValueChange={(priority) => setFilters((current) => ({ ...current, priority }))} options={filterOptions.priorities} />
           </div>
-          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="size-10 shrink-0 border-slate-200" onClick={() => void loadData(true)} disabled={refreshing} aria-label="Ma’lumotlarni yangilash"><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button></TooltipTrigger><TooltipContent>Ma’lumotlarni yangilash</TooltipContent></Tooltip>
-          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="hidden size-10 shrink-0 border-slate-200 sm:inline-flex" onClick={() => setFitRequest((value) => value + 1)} aria-label="Xaritani ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Fit View</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="size-10 shrink-0 rounded-xl border-slate-200 bg-white text-slate-600 shadow-none hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700" onClick={() => void loadData(true)} disabled={refreshing} aria-label="Ma’lumotlarni yangilash"><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /></Button></TooltipTrigger><TooltipContent>Ma’lumotlarni yangilash</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild><Button variant="outline" size="icon" className="hidden size-10 shrink-0 rounded-xl border-slate-200 bg-white text-slate-600 shadow-none hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 sm:inline-flex" onClick={() => setFitRequest((value) => value + 1)} aria-label="Xaritani ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Fit View</TooltipContent></Tooltip>
         </header>
 
-        <div className="flex h-[54px] shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-white px-3 scrollbar-none lg:px-5">
-          <span className="mr-1 flex shrink-0 items-center gap-1.5 text-[12px] font-semibold text-slate-500"><Settings2 className="size-4" /> Filtrlar</span>
+        <div className="flex h-[58px] shrink-0 items-center gap-2 overflow-x-auto border-b border-slate-200 bg-[#FBFCFE] px-3 scrollbar-none lg:px-5">
+          <span className="mr-1 flex shrink-0 items-center gap-2 text-[12px] font-semibold text-slate-600"><span className="flex size-8 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700"><Settings2 className="size-4" /></span> Filtrlar</span>
           <div className="flex shrink-0 gap-2 xl:hidden"><FilterSelect label="Yo‘nalish" value={filters.area} onValueChange={(area) => setFilters((current) => ({ ...current, area }))} options={graph?.areas.map((area) => ({ value: area.id, label: area.name })) ?? []} /><FilterSelect label="Segment" value={filters.segment} onValueChange={(segment) => setFilters((current) => ({ ...current, segment }))} options={filterOptions.segments} /><FilterSelect label="Ustuvorlik" value={filters.priority} onValueChange={(priority) => setFilters((current) => ({ ...current, priority }))} options={filterOptions.priorities} /></div>
           <FilterSelect label="Biznes turi" value={filters.businessType} onValueChange={(businessType) => setFilters((current) => ({ ...current, businessType }))} options={filterOptions.businessTypes} className="min-w-[142px]" />
           <FilterSelect label="Mas’ul" value={filters.responsible} onValueChange={(responsible) => setFilters((current) => ({ ...current, responsible }))} options={filterOptions.responsibles} />
-          {activeFilterCount > 0 && <Button variant="ghost" size="sm" className="h-9 shrink-0 text-slate-500" onClick={() => setFilters(EMPTY_FILTERS)}><FilterX className="size-4" /> Tozalash <Badge variant="secondary" className="ml-1">{activeFilterCount}</Badge></Button>}
+          {activeFilterCount > 0 && <Button variant="ghost" size="sm" className="h-9 shrink-0 rounded-lg text-slate-600 hover:bg-red-50 hover:text-red-700" onClick={() => setFilters(EMPTY_FILTERS)}><FilterX className="size-4" /> Tozalash <Badge variant="secondary" className="ml-1 bg-slate-900 text-white">{activeFilterCount}</Badge></Button>}
           <div className="ml-auto flex shrink-0 items-center gap-3 pl-3 text-[11px] text-slate-500">
             {graph && <span>{visibleProcessIds.size} / {graph.processes.length} jarayon</span>}
             {graph && <span className={`rounded-full border px-2 py-1 font-semibold ${graph.meta.warnings.length ? "border-amber-200 bg-amber-50 text-amber-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"}`}>{graph.meta.warnings.length ? `${graph.meta.warnings.length} data warning` : `Data healthy · ${graph.meta.stageCount} stage`}</span>}

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, CheckCircle2, CircleDot, Clock3, GitBranch, Link2, Lock, Users } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDot, Clock3, GitBranch, Link2, Lock, Users, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -29,6 +29,7 @@ export function ProductionDrawer({ plan, dataset, onClose }: { plan: ProductionP
   const item = plan.item;
   const canonical = item.canonicalProblemIds.map((id) => dataset.canonicalProblems.find((problem) => problem.id === id)).filter(Boolean);
   const source = item.sourceArticleNodeId ? dataset.contentNodes.find((node) => node.nodeId === item.sourceArticleNodeId) : null;
+  const tool = item.toolId ? dataset.tools.find((entry) => entry.toolId === item.toolId) : null;
   return (
     <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent className="w-full gap-0 border-slate-200 bg-white p-0 sm:max-w-[660px]">
@@ -65,8 +66,18 @@ export function ProductionDrawer({ plan, dataset, onClose }: { plan: ProductionP
               <Field label="Funnel Stage" value={item.funnelStage} />
               <Field label="Segment" value={item.primarySegment} />
               <Field label="Business Type" value={item.businessType} />
+              <Field label="Tool_ID" value={item.toolId} mono />
               {source && <Field label="Source Article" value={`${source.nodeId} · ${source.workingTitle}`} />}
             </dl>
+
+            {tool && (
+              <section className="mt-6 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                <h3 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-blue-800"><Wrench className="size-4" /> Bog‘langan Tool</h3>
+                <p className="mt-3 text-[15px] font-semibold text-slate-900">{tool.toolName}</p>
+                <div className="mt-2 flex flex-wrap gap-2"><Badge variant="outline" className="border-blue-200 bg-white text-blue-700">{tool.toolId}</Badge><Badge variant="outline" className="border-blue-200 bg-white text-blue-700">{tool.toolType}</Badge>{tool.status && <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">{tool.status}</Badge>}</div>
+                {tool.primaryUseCase && <p className="mt-3 text-[13px] leading-5 text-slate-600">{tool.primaryUseCase}</p>}
+              </section>
+            )}
 
             {canonical.length > 0 && (
               <section className="mt-6 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
@@ -76,7 +87,7 @@ export function ProductionDrawer({ plan, dataset, onClose }: { plan: ProductionP
             )}
 
             <div className="mt-7 flex items-center justify-between">
-              <h3 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-slate-500"><GitBranch className="size-4" /> Production workflow</h3>
+              <div><h3 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-slate-500"><GitBranch className="size-4" /> Ishlab chiqarish bosqichlari</h3><p className="mt-1 text-[11px] text-slate-400">Bitta kontent kartasi ichidagi rol va deadline’li ishlar</p></div>
               <Badge variant="secondary">{plan.stages.length} bosqich</Badge>
             </div>
             <div className="mt-3 space-y-2">

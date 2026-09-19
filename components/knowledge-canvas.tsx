@@ -432,24 +432,40 @@ export function KnowledgeCanvas({
     });
   };
 
-  const onWheel = (event: React.WheelEvent) => {
-    event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
-      const rect = viewportRef.current!.getBoundingClientRect();
-      const pointerX = event.clientX - rect.left;
-      const pointerY = event.clientY - rect.top;
-      setTransform((current) => {
-        const nextScale = Math.min(1.75, Math.max(0.05, current.scale * Math.exp(-event.deltaY * 0.008)));
-        const worldX = (pointerX - current.x) / current.scale;
-        const worldY = (pointerY - current.y) / current.scale;
-        return { scale: nextScale, x: pointerX - worldX * nextScale, y: pointerY - worldY * nextScale };
-      });
-    } else {
-      setTransform((current) => ({ ...current, x: current.x - event.deltaX, y: current.y - event.deltaY }));
-    }
-  };
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? viewport.clientHeight : 1;
+      if (event.ctrlKey || event.metaKey) {
+        const rect = viewport.getBoundingClientRect();
+        const pointerX = event.clientX - rect.left;
+        const pointerY = event.clientY - rect.top;
+        const delta = Math.max(-80, Math.min(80, event.deltaY * unit));
+        setTransform((current) => {
+          const nextScale = Math.min(1.75, Math.max(0.05, current.scale * Math.exp(-delta * 0.008)));
+          const worldX = (pointerX - current.x) / current.scale;
+          const worldY = (pointerY - current.y) / current.scale;
+          return { scale: nextScale, x: pointerX - worldX * nextScale, y: pointerY - worldY * nextScale };
+        });
+        return;
+      }
+      setTransform((current) => ({ ...current, x: current.x - event.deltaX * unit, y: current.y - event.deltaY * unit }));
+    };
+    const preventBrowserGesture = (event: Event) => event.preventDefault();
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    viewport.addEventListener("gesturestart", preventBrowserGesture, { passive: false });
+    viewport.addEventListener("gesturechange", preventBrowserGesture, { passive: false });
+    return () => {
+      viewport.removeEventListener("wheel", handleWheel);
+      viewport.removeEventListener("gesturestart", preventBrowserGesture);
+      viewport.removeEventListener("gesturechange", preventBrowserGesture);
+    };
+  }, []);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    event.currentTarget.focus({ preventScroll: true });
     if ((event.target as HTMLElement).closest("[data-node]")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: transform.x, originY: transform.y };
@@ -465,6 +481,12 @@ export function KnowledgeCanvas({
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
   };
 
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "+" || event.key === "=") { event.preventDefault(); zoomAtCenter(1.18); }
+    if (event.key === "-") { event.preventDefault(); zoomAtCenter(0.84); }
+    if (event.key === "0") { event.preventDefault(); fitView(); }
+  };
+
   const minimapView = {
     x: -transform.x / transform.scale,
     y: -transform.y / transform.scale,
@@ -475,9 +497,11 @@ export function KnowledgeCanvas({
   return (
     <div
       ref={viewportRef}
-      className="relative h-full w-full touch-none overflow-hidden bg-[#F7F9FC]"
+      tabIndex={0}
+      aria-label="Interaktiv biznes jarayonlari xaritasi"
+      className="relative h-full w-full touch-none overflow-hidden bg-[#F7F9FC] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500/40"
       style={{ backgroundImage: "radial-gradient(circle, #CBD5E1 1px, transparent 1px)", backgroundSize: "22px 22px" }}
-      onWheel={onWheel}
+      onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={stopDrag}
@@ -513,13 +537,13 @@ export function KnowledgeCanvas({
         ))}
       </div>
 
-      <div className="absolute bottom-5 left-5 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_8px_30px_rgba(16,24,40,.10)]">
-        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-8" onClick={() => zoomAtCenter(1.18)} aria-label="Kattalashtirish"><Plus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kattalashtirish</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-8" onClick={() => zoomAtCenter(0.84)} aria-label="Kichraytirish"><Minus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kichraytirish</TooltipContent></Tooltip>
-        <span className="min-w-12 text-center text-[12px] font-semibold text-slate-500">{Math.round(transform.scale * 100)}%</span>
+      <div className="absolute bottom-5 left-5 flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1.5 shadow-[0_10px_32px_rgba(15,23,42,.12)] backdrop-blur">
+        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => zoomAtCenter(1.18)} aria-label="Kattalashtirish"><Plus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kattalashtirish</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => zoomAtCenter(0.84)} aria-label="Kichraytirish"><Minus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kichraytirish</TooltipContent></Tooltip>
+        <span className="min-w-14 rounded-md bg-slate-900 px-2 py-1.5 text-center text-[11px] font-bold tabular-nums text-white">{Math.round(transform.scale * 100)}%</span>
         <div className="mx-1 h-5 w-px bg-slate-200" />
-        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-8" onClick={fitView} aria-label="Ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Ekranga sig‘dirish</TooltipContent></Tooltip>
-        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-8" onClick={() => setTransform({ x: 30, y: 30, scale: 1 })} aria-label="Ko‘rinishni tiklash"><LocateFixed className="size-4" /></Button></TooltipTrigger><TooltipContent>Ko‘rinishni tiklash</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={fitView} aria-label="Ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Ekranga sig‘dirish</TooltipContent></Tooltip>
+        <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => setTransform({ x: 30, y: 30, scale: 1 })} aria-label="Ko‘rinishni tiklash"><LocateFixed className="size-4" /></Button></TooltipTrigger><TooltipContent>Ko‘rinishni tiklash</TooltipContent></Tooltip>
       </div>
 
       <button

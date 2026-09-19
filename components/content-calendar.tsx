@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, GitBranch, Layers3, Lock, RefreshCw, SlidersHorizontal, Users } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CalendarDays, GitBranch, Layers3, Lock, RefreshCw, SlidersHorizontal, Users, Wrench } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ProductionDrawer } from "@/components/production-drawer";
@@ -25,7 +25,7 @@ function CalendarItem({ plan, onClick, compact = false }: { plan: ProductionPlan
   return <button type="button" onClick={onClick} className={`group w-full rounded-lg border bg-white text-left transition hover:border-blue-300 hover:shadow-sm ${compact ? "px-2 py-1.5" : "p-2.5"} ${plan.scheduleRisk === "late" ? "border-red-200" : plan.scheduleRisk === "at_risk" ? "border-amber-200" : "border-slate-200"}`}>
     <div className="flex items-center gap-1.5"><span className={`size-1.5 shrink-0 rounded-full ${priorityTone(item.priorityBand)}`} /><span className="truncate text-[10px] font-bold text-slate-500">{item.language} · {item.primaryPlatform}</span>{item.scheduleLocked && <Lock className="ml-auto size-3 text-amber-600" />}</div>
     <p className={`mt-1 font-semibold text-slate-800 ${compact ? "line-clamp-1 text-[11px]" : "line-clamp-2 text-[12px] leading-4"}`}>{item.workingTitle}</p>
-    {!compact && <div className="mt-2 flex items-center gap-1.5 text-[10px] text-slate-500"><Badge variant="secondary" className="h-4 px-1 text-[9px]">{item.primaryContentType}</Badge>{item.sourceArticleNodeId && <span className="flex items-center gap-1 text-violet-600"><GitBranch className="size-3" /> derivative</span>}</div>}
+    {!compact && <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500"><Badge variant="secondary" className="h-4 px-1 text-[9px]">{item.primaryContentType}</Badge>{item.toolId && <span className="flex items-center gap-1 font-semibold text-blue-700"><Wrench className="size-3" /> Tool · {item.toolId}</span>}{item.sourceArticleNodeId && <span className="flex items-center gap-1 text-violet-600"><GitBranch className="size-3" /> derivative</span>}</div>}
   </button>;
 }
 

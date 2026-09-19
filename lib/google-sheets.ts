@@ -17,6 +17,9 @@ import type {
   ProductionHoliday,
   ProductionItem,
   ProductionSetting,
+  ProductionTaskOverride,
+  ProductionTaskStatus,
+  ProductionTool,
   PublishingRule,
   TeamMember,
   WorkflowStageDefinition,
@@ -39,12 +42,14 @@ const AREA_SHEETS: Array<{
 const CANONICAL_TAB = "11_CANONICAL_MUAMMOLAR";
 const CONTENT_CLUSTER_TAB = "12_CONTENT_CLUSTER_MAP";
 const CONTENT_NODES_TAB = "13_CONTENT_NODES";
+const TOOLS_TAB = "14_TOOLS";
 const PRODUCTION_TAB = "16_PRODUCTION_SYSTEM";
 const SETTINGS_TAB = "17_PRODUCTION_SETTINGS";
 const TEAM_TAB = "18_TEAM_CAPACITY";
 const WORKFLOW_TAB = "19_CONTENT_WORKFLOW";
 const PUBLISHING_TAB = "20_PUBLISHING_RULES";
 const HOLIDAYS_TAB = "21_HOLIDAYS";
+const TASKS_TAB = "22_PRODUCTION_TASKS";
 const CACHE_MS = 20_000;
 
 let tokenCache: { value: string; expiresAt: number } | null = null;
@@ -83,7 +88,7 @@ async function getAccessToken(email: string, privateKey: string) {
   const now = Math.floor(Date.now() / 1000);
   const unsigned = `${base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${base64Url(JSON.stringify({
     iss: email,
-    scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
+    scope: "https://www.googleapis.com/auth/spreadsheets",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -327,6 +332,40 @@ export function normalizeKnowledgeGraph(tabs: Map<string, SheetRecord[]>, spread
 
 function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadsheetId: string): ProductionDataset {
   const warnings: string[] = [];
+  const tools: ProductionTool[] = (tabs.get(TOOLS_TAB) ?? []).flatMap((record) => {
+    const toolId = readSheetValue(record, "Tool_ID");
+    return toolId ? [{
+      toolId,
+      clusterId: readSheetValue(record, "Cluster_ID"),
+      toolName: readSheetValue(record, "Tool_Name"),
+      toolType: readSheetValue(record, "Tool_Type"),
+      primaryUseCase: readSheetValue(record, "Primary_Use_Case"),
+      status: readSheetValue(record, "Status"),
+      priorityBand: readSheetValue(record, "Priority_Band"),
+      primarySegment: readSheetValue(record, "Primary_Segment"),
+      sourceRecord: record,
+    }] : [];
+  });
+  const taskOverrides: ProductionTaskOverride[] = (tabs.get(TASKS_TAB) ?? []).flatMap((record) => {
+    const taskId = readSheetValue(record, "Task_ID");
+    if (!taskId) return [];
+    const rawStatus = readSheetValue(record, "Status");
+    const status = /^(pending|in_progress|blocked|done)$/.test(rawStatus) ? rawStatus as ProductionTaskStatus : "";
+    return [{
+      taskId,
+      productionId: readSheetValue(record, "Production_ID"),
+      stageId: readSheetValue(record, "Stage_ID"),
+      status,
+      assigneeId: readSheetValue(record, "Assignee_ID"),
+      startDateOverride: readSheetValue(record, "Start_Date_Override"),
+      deadlineOverride: readSheetValue(record, "Deadline_Override"),
+      locked: asBoolean(readSheetValue(record, "Locked")),
+      notes: readSheetValue(record, "Notes"),
+      updatedAt: readSheetValue(record, "Updated_At"),
+      active: !readSheetValue(record, "Active") || asBoolean(readSheetValue(record, "Active")),
+      sourceRecord: record,
+    }];
+  });
   const contentNodes: ContentNode[] = (tabs.get(CONTENT_NODES_TAB) ?? []).flatMap((record) => {
     const nodeId = readSheetValue(record, "Node_ID");
     if (!nodeId) return [];
@@ -428,7 +467,7 @@ function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spreadshee
   if (!workflow.some((item) => item.active)) warnings.push("Content workflow faol emas");
   if (!publishingRules.some((item) => item.active)) warnings.push("Publishing rules faol emas");
   return {
-    items, contentNodes, settings, team, workflow, publishingRules, holidays,
+    items, contentNodes, tools, taskOverrides, settings, team, workflow, publishingRules, holidays,
     canonicalProblems: canonicalProblemsFrom(tabs.get(CANONICAL_TAB) ?? []),
     contentClusters: tabs.get(CONTENT_CLUSTER_TAB) ?? [],
     meta: { loadedAt: new Date().toISOString(), spreadsheetId, warnings },
@@ -457,12 +496,52 @@ export async function loadProductionDataset(force = false) {
   if (!force && productionCache && productionCache.expiresAt > Date.now()) return productionCache.value;
   const spreadsheetId = env.GOOGLE_SHEET_ID.trim();
   const requirements: Array<[string, string]> = [
-    [CONTENT_NODES_TAB, "Node_ID"], [PRODUCTION_TAB, "Production_ID"], [SETTINGS_TAB, "Setting_Key"],
+    [CONTENT_NODES_TAB, "Node_ID"], [TOOLS_TAB, "Tool_ID"], [PRODUCTION_TAB, "Production_ID"], [SETTINGS_TAB, "Setting_Key"],
     [TEAM_TAB, "Employee_ID"], [WORKFLOW_TAB, "Stage_ID"], [PUBLISHING_TAB, "Rule_ID"],
-    [HOLIDAYS_TAB, "Date"], [CANONICAL_TAB, "Canonical_Problem_ID"], [CONTENT_CLUSTER_TAB, "Cluster_ID"],
+    [HOLIDAYS_TAB, "Date"], [TASKS_TAB, "Task_ID"], [CANONICAL_TAB, "Canonical_Problem_ID"], [CONTENT_CLUSTER_TAB, "Cluster_ID"],
   ];
   const { records } = await fetchTabs(spreadsheetId, requirements);
   const dataset = normalizeProductionDataset(records, spreadsheetId);
   productionCache = { value: dataset, expiresAt: Date.now() + CACHE_MS };
   return dataset;
+}
+
+export async function upsertProductionTaskOverride(input: {
+  taskId: string;
+  productionId: string;
+  stageId: string;
+  status?: ProductionTaskStatus;
+  assigneeId?: string;
+}) {
+  if (!input.taskId || !input.productionId || !input.stageId) throw new Error("Task identifikatorlari yetishmayapti");
+  if (input.status && !/^(pending|in_progress|blocked|done)$/.test(input.status)) throw new Error("Task status noto‘g‘ri");
+  const spreadsheetId = env.GOOGLE_SHEET_ID.trim();
+  const token = await getAccessToken(env.GOOGLE_SERVICE_ACCOUNT_EMAIL.trim(), env.GOOGLE_PRIVATE_KEY);
+  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const valuesUrl = (range: string) => `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`;
+  const indexResponse = await fetchWithTimeout(valuesUrl(`'${TASKS_TAB}'!A5:A5000`), { headers, cache: "no-store" });
+  if (!indexResponse.ok) throw new Error(indexResponse.status === 403 ? "WRITE_ACCESS_REQUIRED" : `Task table read failed (${indexResponse.status})`);
+  const indexPayload = (await indexResponse.json()) as { values?: string[][] };
+  const found = (indexPayload.values ?? []).findIndex((row) => row[0] === input.taskId);
+  const updatedAt = new Date().toISOString();
+  let row = [input.taskId, input.productionId, input.stageId, input.status ?? "pending", input.assigneeId ?? "", "", "", false, "", updatedAt, true];
+  let response: Response;
+  if (found >= 0) {
+    const rowNumber = found + 5;
+    const existingResponse = await fetchWithTimeout(valuesUrl(`'${TASKS_TAB}'!A${rowNumber}:K${rowNumber}`), { headers, cache: "no-store" });
+    if (existingResponse.ok) {
+      const existing = ((await existingResponse.json()) as { values?: Array<Array<string | boolean>> }).values?.[0] ?? [];
+      row = Array.from({ length: 11 }, (_, index) => existing[index] ?? row[index]);
+      row[0] = input.taskId; row[1] = input.productionId; row[2] = input.stageId;
+      if (input.status) row[3] = input.status;
+      if (input.assigneeId !== undefined) row[4] = input.assigneeId;
+      row[9] = updatedAt; row[10] = true;
+    }
+    response = await fetchWithTimeout(`${valuesUrl(`'${TASKS_TAB}'!A${rowNumber}:K${rowNumber}`)}?valueInputOption=USER_ENTERED`, { method: "PUT", headers, body: JSON.stringify({ values: [row] }) });
+  } else {
+    response = await fetchWithTimeout(`${valuesUrl(`'${TASKS_TAB}'!A5:K`)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, { method: "POST", headers, body: JSON.stringify({ values: [row] }) });
+  }
+  if (!response.ok) throw new Error(response.status === 403 ? "WRITE_ACCESS_REQUIRED" : `Task update failed (${response.status})`);
+  productionCache = null;
+  return { taskId: input.taskId, status: input.status, assigneeId: input.assigneeId, updatedAt };
 }
