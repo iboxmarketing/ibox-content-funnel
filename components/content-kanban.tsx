@@ -176,8 +176,10 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
   }), [dataset.items, schedule.plans]);
   const toolById = useMemo(() => new Map(dataset.tools.map((tool) => [tool.toolId, tool])), [dataset.tools]);
   const activeTeam = useMemo(() => dataset.team.filter((member) => member.active), [dataset.team]);
+  const runtimeWritable = dataset.meta.taskWriteMode === "TASK_BACKEND" && !simulation;
 
   const persistTask = async (plan: ProductionPlan, stage: ScheduledStage, patch: { status?: ProductionTaskStatus; assigneeId?: string }) => {
+    if (!runtimeWritable) { setTaskError("Drag-and-drop va assignee o‘zgarishi real task bot backend ulangandan keyin ishlaydi. Sheet endi task backend sifatida ishlatilmaydi."); return; }
     if (simulation) { setTaskError("Sinov rejimida task saqlanmaydi. Avval sinovni bekor qiling."); return; }
     const previousStatus = taskStatusOverrides[stage.taskId];
     const previousAssignee = taskAssigneeOverrides[stage.taskId];
@@ -260,6 +262,7 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
 
   const handleTaskDrop = (event: React.DragEvent<HTMLElement>, status: ProductionTaskStatus) => {
     event.preventDefault();
+    if (!runtimeWritable) { setTaskError("Bu hozir preview. Real task bot backend ulangach drag-and-drop faollashadi."); return; }
     try {
       const payload = JSON.parse(event.dataTransfer.getData("application/x-ibox-task")) as { taskId?: string; productionId?: string; stageId?: string };
       const entry = taskEntries.find(({ stage }) => stage.taskId === payload.taskId);
@@ -284,41 +287,43 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#F7F9FC]">
       <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 lg:px-5">
-        <div><h1 className="text-[17px] font-bold tracking-[-0.02em] text-slate-950">Content Kanban</h1><p className="text-[11px] text-slate-500">Google Sheet · workflow tasklari va kontent pipeline</p></div>
+        <div><h1 className="text-[17px] font-bold tracking-[-0.02em] text-slate-950">Content Kanban</h1><p className="text-[11px] text-slate-500">Google Sheet konfiguratsiyasi · real tasklar Telegram bot backendida</p></div>
         <div className="flex rounded-xl border border-slate-200 bg-slate-50 p-1">
           <button type="button" onClick={() => setBoardMode("tasks")} className={`h-8 rounded-lg px-3 text-[12px] font-semibold transition ${boardMode === "tasks" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Ish tasklari</button>
           <button type="button" onClick={() => setBoardMode("content")} className={`h-8 rounded-lg px-3 text-[12px] font-semibold transition ${boardMode === "content" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}>Kontent pipeline</button>
         </div>
         <div className="relative ml-auto min-w-[240px] max-w-[420px] flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Kontent, Node_ID yoki cluster…" className="h-9 bg-slate-50 pl-9 shadow-none" /></div>
-        <select value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[13px] text-slate-700"><option value="priority">Priority first</option><option value="publish">Publish date first</option><option value="overdue">Overdue first</option><option value="risk">Workload risk first</option></select>
-        <Button variant="outline" size="sm" className="h-9" onClick={onRefresh} disabled={refreshing}><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /> Refresh</Button>
+        <select value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-[13px] font-medium text-slate-700 outline-none hover:border-blue-200 focus:border-blue-400"><option value="priority">Avval ustuvorlik</option><option value="publish">Avval nashr sanasi</option><option value="overdue">Avval kechikkanlar</option><option value="risk">Avval yuklama xavfi</option></select>
+        <Button variant="outline" size="sm" className="h-9 rounded-xl" onClick={onRefresh} disabled={refreshing}><RefreshCw className={`size-4 ${refreshing ? "animate-spin" : ""}`} /> Yangilash</Button>
         <span className="text-[11px] text-slate-400">{formatDisplayDate(lastSynced, true)}</span>
       </div>
 
       {taskError && <div className="flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2 text-[12px] font-medium text-amber-800"><AlertTriangle className="size-4" /> {taskError}<button type="button" onClick={() => setTaskError("")} className="ml-auto font-semibold hover:text-amber-950">Yopish</button></div>}
 
-      <div className="shrink-0 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-3 lg:px-5"><div className="flex min-w-max gap-2"><Counter label="Active content" value={active} /><Counter label="Overdue" value={overdue} tone="red" /><Counter label="At risk" value={atRisk} tone="amber" /><Counter label="Ready" value={ready} tone="emerald" /><Counter label="Scheduled this week" value={scheduledWeek} tone="blue" /><Counter label="Published this week" value={publishedWeek} /><Counter label="P0 backlog" value={p0Backlog} tone="red" /><Counter label="Team capacity avg" value={`${capacityAverage}%`} tone={capacityAverage > 100 ? "red" : capacityAverage >= 80 ? "amber" : "emerald"} /></div></div>
+      {!runtimeWritable && boardMode === "tasks" && <div className="flex shrink-0 items-start gap-2 border-b border-blue-200 bg-blue-50 px-4 py-2.5 text-[12px] leading-5 text-blue-950 lg:px-5"><CircleDot className="mt-0.5 size-4 shrink-0 text-blue-700" /><span><strong>Task preview.</strong> `22_PRODUCTION_TASKS`ga yozish to‘xtatildi. Bot backend va Head autentifikatsiyasi ulanguncha kartalar ko‘riladi, ammo ko‘chirilmaydi.</span></div>}
+
+      <div className="shrink-0 overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 py-3 lg:px-5"><div className="flex min-w-max gap-2"><Counter label="Faol kontent" value={active} /><Counter label="Kechikkan" value={overdue} tone="red" /><Counter label="Xavf ostida" value={atRisk} tone="amber" /><Counter label="Tayyor" value={ready} tone="emerald" /><Counter label="Shu hafta rejalangan" value={scheduledWeek} tone="blue" /><Counter label="Shu hafta chiqqan" value={publishedWeek} /><Counter label="P0 backlog" value={p0Backlog} tone="red" /><Counter label="O‘rtacha yuklama" value={`${capacityAverage}%`} tone={capacityAverage > 100 ? "red" : capacityAverage >= 80 ? "amber" : "emerald"} /></div></div>
 
       <details className="group shrink-0 border-b border-slate-200 bg-white">
         <summary className="flex h-11 cursor-pointer list-none items-center gap-2 px-4 text-[13px] font-semibold text-slate-600 lg:px-5"><Filter className="size-4" /> Kengaytirilgan filtrlar <Badge variant="secondary">{filtered.length}</Badge><ChevronDown className="ml-auto size-4 transition group-open:rotate-180" /></summary>
         <div className="grid gap-3 border-t border-slate-100 p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-          <SelectField label="Priority Band" value={filters.priorityBand} options={options.priorities} onChange={(value) => setFilters((f) => ({ ...f, priorityBand: value }))} />
-          <SelectField label="Employee" value={filters.employee} options={options.employees} onChange={(value) => setFilters((f) => ({ ...f, employee: value }))} />
-          <SelectField label="Role" value={filters.role} options={options.roles} onChange={(value) => setFilters((f) => ({ ...f, role: value }))} />
-          <SelectField label="Status" value={filters.status} options={options.statuses} onChange={(value) => setFilters((f) => ({ ...f, status: value }))} />
-          <SelectField label="Publishability" value={filters.publishability} options={options.publishability} onChange={(value) => setFilters((f) => ({ ...f, publishability: value }))} />
-          <SelectField label="Content Type" value={filters.contentType} options={options.contentTypes} onChange={(value) => setFilters((f) => ({ ...f, contentType: value }))} />
+          <SelectField label="Ustuvorlik" value={filters.priorityBand} options={options.priorities} onChange={(value) => setFilters((f) => ({ ...f, priorityBand: value }))} />
+          <SelectField label="Xodim" value={filters.employee} options={options.employees} onChange={(value) => setFilters((f) => ({ ...f, employee: value }))} />
+          <SelectField label="Rol" value={filters.role} options={options.roles} onChange={(value) => setFilters((f) => ({ ...f, role: value }))} />
+          <SelectField label="Holat" value={filters.status} options={options.statuses} onChange={(value) => setFilters((f) => ({ ...f, status: value }))} />
+          <SelectField label="Nashrga tayyorlik" value={filters.publishability} options={options.publishability} onChange={(value) => setFilters((f) => ({ ...f, publishability: value }))} />
+          <SelectField label="Kontent turi" value={filters.contentType} options={options.contentTypes} onChange={(value) => setFilters((f) => ({ ...f, contentType: value }))} />
           <SelectField label="Platform" value={filters.platform} options={options.platforms} onChange={(value) => setFilters((f) => ({ ...f, platform: value }))} />
-          <SelectField label="Language" value={filters.language} options={options.languages} onChange={(value) => setFilters((f) => ({ ...f, language: value }))} />
-          <SelectField label="Funnel Stage" value={filters.funnelStage} options={options.funnels} onChange={(value) => setFilters((f) => ({ ...f, funnelStage: value }))} />
-          <SelectField label="Primary Segment" value={filters.segment} options={options.segments} onChange={(value) => setFilters((f) => ({ ...f, segment: value }))} />
-          <SelectField label="Cluster" value={filters.cluster} options={options.clusters} onChange={(value) => setFilters((f) => ({ ...f, cluster: value }))} />
-          <SelectField label="Node Role" value={filters.nodeRole} options={options.nodeRoles} onChange={(value) => setFilters((f) => ({ ...f, nodeRole: value }))} />
-          <label className="grid gap-1.5"><span className="text-[11px] font-bold uppercase text-slate-400">Date from</span><input type="date" value={filters.dateFrom} onChange={(event) => setFilters((f) => ({ ...f, dateFrom: event.target.value }))} className="h-9 rounded-lg border border-slate-200 px-2 text-[13px]" /></label>
-          <label className="grid gap-1.5"><span className="text-[11px] font-bold uppercase text-slate-400">Date to</span><input type="date" value={filters.dateTo} onChange={(event) => setFilters((f) => ({ ...f, dateTo: event.target.value }))} className="h-9 rounded-lg border border-slate-200 px-2 text-[13px]" /></label>
-          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.overdueOnly} onChange={(event) => setFilters((f) => ({ ...f, overdueOnly: event.target.checked }))} /> Overdue only</label>
-          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.atRiskOnly} onChange={(event) => setFilters((f) => ({ ...f, atRiskOnly: event.target.checked }))} /> At-risk only</label>
-          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.showInternal} onChange={(event) => setFilters((f) => ({ ...f, showInternal: event.target.checked }))} /> Internal architecture</label>
+          <SelectField label="Til" value={filters.language} options={options.languages} onChange={(value) => setFilters((f) => ({ ...f, language: value }))} />
+          <SelectField label="Funnel bosqichi" value={filters.funnelStage} options={options.funnels} onChange={(value) => setFilters((f) => ({ ...f, funnelStage: value }))} />
+          <SelectField label="Asosiy segment" value={filters.segment} options={options.segments} onChange={(value) => setFilters((f) => ({ ...f, segment: value }))} />
+          <SelectField label="Klaster" value={filters.cluster} options={options.clusters} onChange={(value) => setFilters((f) => ({ ...f, cluster: value }))} />
+          <SelectField label="Node roli" value={filters.nodeRole} options={options.nodeRoles} onChange={(value) => setFilters((f) => ({ ...f, nodeRole: value }))} />
+          <label className="grid gap-1.5"><span className="text-[11px] font-bold uppercase text-slate-400">Boshlanish sanasi</span><input type="date" value={filters.dateFrom} onChange={(event) => setFilters((f) => ({ ...f, dateFrom: event.target.value }))} className="h-9 rounded-lg border border-slate-200 px-2 text-[13px]" /></label>
+          <label className="grid gap-1.5"><span className="text-[11px] font-bold uppercase text-slate-400">Tugash sanasi</span><input type="date" value={filters.dateTo} onChange={(event) => setFilters((f) => ({ ...f, dateTo: event.target.value }))} className="h-9 rounded-lg border border-slate-200 px-2 text-[13px]" /></label>
+          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.overdueOnly} onChange={(event) => setFilters((f) => ({ ...f, overdueOnly: event.target.checked }))} /> Faqat kechikkan</label>
+          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.atRiskOnly} onChange={(event) => setFilters((f) => ({ ...f, atRiskOnly: event.target.checked }))} /> Faqat xavf ostida</label>
+          <label className="flex items-center gap-2 text-[13px] text-slate-700"><input type="checkbox" checked={filters.showInternal} onChange={(event) => setFilters((f) => ({ ...f, showInternal: event.target.checked }))} /> Ichki arxitektura</label>
           <Button variant="outline" size="sm" className="self-end" onClick={() => setFilters(INITIAL_FILTERS)}><Settings2 className="size-4" /> Filtrlarni tozalash</Button>
         </div>
       </details>
@@ -329,10 +334,10 @@ export function ContentKanban({ dataset, schedule, onRefresh, refreshing, lastSy
             {TASK_COLUMNS.map((column) => {
               const cards = taskCardsByStatus.get(column.id) ?? [];
               const visibleCards = cards.slice(0, columnLimits[`task-${column.id}`] ?? 60);
-              return <section key={column.id} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => handleTaskDrop(event, column.id)} className="flex h-full w-[310px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-100/70 transition-colors hover:bg-slate-100">
+              return <section key={column.id} onDragOver={(event) => { if (runtimeWritable) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }} onDrop={(event) => handleTaskDrop(event, column.id)} className="flex h-full w-[310px] shrink-0 flex-col rounded-2xl border border-slate-200 bg-slate-100/70 transition-colors hover:bg-slate-100">
                 <header className="shrink-0 border-b border-slate-200 px-3.5 py-3"><div className="flex items-center justify-between"><div className="flex items-center gap-2">{column.id === "done" ? <CheckCircle2 className="size-4 text-emerald-600" /> : column.id === "blocked" ? <AlertTriangle className="size-4 text-red-600" /> : <CircleDot className={`size-4 ${column.id === "in_progress" ? "text-blue-600" : "text-slate-400"}`} />}<h2 className="text-[12px] font-bold tracking-[0.04em] text-slate-700">{column.label.toUpperCase()}</h2></div><Badge variant="secondary">{cards.length}</Badge></div><p className="mt-1 text-[10px] text-slate-400">{column.description}</p></header>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5 scrollbar-thin">
-                  {visibleCards.map(({ plan, stage }) => <TaskCard key={stage.taskId} plan={plan} stage={stage} status={taskStatusOverrides[stage.taskId] ?? stage.status} assigneeId={taskAssigneeOverrides[stage.taskId] ?? stage.ownerId} team={activeTeam} readOnly={simulation} saving={savingTasks.has(stage.taskId)} onOpen={() => setSelection(plan)} onAssigneeChange={(assigneeId) => void persistTask(plan, stage, { assigneeId })} />)}
+                  {visibleCards.map(({ plan, stage }) => <TaskCard key={stage.taskId} plan={plan} stage={stage} status={taskStatusOverrides[stage.taskId] ?? stage.status} assigneeId={taskAssigneeOverrides[stage.taskId] ?? stage.ownerId} team={activeTeam} readOnly={!runtimeWritable} saving={savingTasks.has(stage.taskId)} onOpen={() => setSelection(plan)} onAssigneeChange={(assigneeId) => void persistTask(plan, stage, { assigneeId })} />)}
                   {visibleCards.length < cards.length && <Button variant="outline" size="sm" className="w-full bg-white" onClick={() => setColumnLimits((current) => ({ ...current, [`task-${column.id}`]: (current[`task-${column.id}`] ?? 60) + 60 }))}>Yana {Math.min(60, cards.length - visibleCards.length)} ta ko‘rsatish</Button>}
                   {!cards.length && <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 p-5 text-center text-[12px] text-slate-400">Taskni shu yerga olib keling</div>}
                 </div>

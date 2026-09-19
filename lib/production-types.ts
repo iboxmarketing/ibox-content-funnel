@@ -163,6 +163,90 @@ export interface ProductionTaskOverride {
   sourceRecord: SheetRecord;
 }
 
+export interface TopicPackagePlan {
+  packagePlanId: string;
+  planningMonth: string;
+  suggestedOrder: number;
+  primaryArea: string;
+  topicUz: string;
+  clusterId: string;
+  mainNodeId: string;
+  sourceProductionId: string;
+  packageObjectiveUz: string;
+  proposedContentScopeUz: string;
+  planningStatus: string;
+  notesUz: string;
+  sourceRecord: SheetRecord;
+}
+
+export interface TopicPackageItem {
+  packageItemId: string;
+  packagePlanId: string;
+  itemOrder: number;
+  workflowId: string;
+  formatCode: string;
+  workingTitleUz: string;
+  sourceNodeId: string;
+  sourceProductionId: string;
+  sourcePackageItemId: string;
+  channelAccountIds: string[];
+  language: string;
+  quantity: number;
+  required: boolean;
+  approvalStatus: string;
+  ownerEmployeeId: string;
+  targetPublishDate: string;
+  scheduleLocked: boolean;
+  runtimeItemId: string;
+  active: boolean;
+  notesUz: string;
+  sourceRecord: SheetRecord;
+}
+
+export interface LaunchPreparationItem {
+  preparationId: string;
+  proposedWindowUz: string;
+  stageUz: string;
+  primaryRole: string;
+  workUz: string;
+  dependencies: string[];
+  completionCriteriaUz: string;
+  statusUz: string;
+  notesUz: string;
+  sourceRecord: SheetRecord;
+}
+
+export interface TaskTemplateDefinition {
+  taskTemplateId: string;
+  taskCode: string;
+  taskNameUz: string;
+  ownerRole: string;
+  assignmentRuleId: string;
+  estimateMinutes: number | null;
+  outputRequired: boolean;
+  outputUz: string;
+  scope: string;
+  approvalPolicyId: string;
+  activationCondition: string;
+  templateVersion: string;
+  templateStatus: string;
+}
+
+export interface WorkflowStepDefinition {
+  workflowId: string;
+  stepId: string;
+  stepOrder: number;
+  taskTemplateId: string;
+  dependencyStepIds: string[];
+  scope: string;
+  activationCondition: string;
+  approvalPolicyId: string;
+  isMilestone: boolean;
+  milestoneUz: string;
+  templateVersion: string;
+  status: string;
+}
+
 export interface ProductionDataset {
   items: ProductionItem[];
   contentNodes: ContentNode[];
@@ -174,6 +258,11 @@ export interface ProductionDataset {
   publishingRules: PublishingRule[];
   holidays: ProductionHoliday[];
   channels?: ChannelAccount[];
+  topicPackages: TopicPackagePlan[];
+  topicPackageItems: TopicPackageItem[];
+  launchPreparation: LaunchPreparationItem[];
+  taskTemplates: TaskTemplateDefinition[];
+  workflowSteps: WorkflowStepDefinition[];
   canonicalProblems: CanonicalProblem[];
   contentClusters: SheetRecord[];
   meta: {
@@ -181,6 +270,7 @@ export interface ProductionDataset {
     spreadsheetId: string;
     warnings: string[];
     sheetIds?: Record<string, number>;
+    taskWriteMode?: "TASK_BACKEND" | "SETUP_REQUIRED";
   };
 }
 

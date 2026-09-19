@@ -20,9 +20,13 @@ import type {
   ProductionItem,
   ProductionSetting,
   ProductionTaskOverride,
-  ProductionTaskStatus,
   ProductionTool,
   PublishingRule,
+  TopicPackagePlan,
+  TopicPackageItem,
+  LaunchPreparationItem,
+  TaskTemplateDefinition,
+  WorkflowStepDefinition,
   TeamMember,
   WorkflowStageDefinition,
 } from "./production-types";
@@ -53,6 +57,11 @@ const PUBLISHING_TAB = "20_PUBLISHING_RULES";
 const HOLIDAYS_TAB = "21_HOLIDAYS";
 const TASKS_TAB = "22_PRODUCTION_TASKS";
 const CHANNELS_TAB = "32_CHANNEL_ACCOUNTS";
+const TASK_TEMPLATES_TAB = "23_TASK_TEMPLATES";
+const WORKFLOW_STEPS_TAB = "25_WORKFLOW_STEPS";
+const TOPIC_PACKAGES_TAB = "33_TOPIC_PACKAGE_PLAN";
+const LAUNCH_PREPARATION_TAB = "34_LAUNCH_PREPARATION";
+const TOPIC_PACKAGE_ITEMS_TAB = "35_TOPIC_PACKAGE_ITEMS";
 const CACHE_MS = 20_000;
 
 let tokenCache: { value: string; expiresAt: number } | null = null;
@@ -91,7 +100,7 @@ async function getAccessToken(email: string, privateKey: string) {
   const now = Math.floor(Date.now() / 1000);
   const unsigned = `${base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }))}.${base64Url(JSON.stringify({
     iss: email,
-    scope: "https://www.googleapis.com/auth/spreadsheets",
+    scope: "https://www.googleapis.com/auth/spreadsheets.readonly",
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -474,14 +483,111 @@ export function normalizeProductionDataset(tabs: Map<string, SheetRecord[]>, spr
     const optionalNumber = (key: string) => readSheetValue(record, key) ? Number(readSheetValue(record, key)) : null;
     return channelAccountId ? [{ channelAccountId, platform: readSheetValue(record, "Platform"), accountName: readSheetValue(record, "Account_Name"), publicUrl: readSheetValue(record, "Public_URL"), timezone: readSheetValue(record, "Timezone"), weeklyMax: optionalNumber("Account_Weekly_Max"), minimumGapMinutes: optionalNumber("Account_Minimum_Gap_Minutes"), active: asBoolean(readSheetValue(record, "Active")) }] : [];
   });
+  const topicPackages: TopicPackagePlan[] = (tabs.get(TOPIC_PACKAGES_TAB) ?? []).flatMap((record) => {
+    const packagePlanId = readSheetValue(record, "Package_Plan_ID");
+    return packagePlanId ? [{
+      packagePlanId,
+      planningMonth: readSheetValue(record, "Planning_Month"),
+      suggestedOrder: asNumber(readSheetValue(record, "Suggested_Order")),
+      primaryArea: readSheetValue(record, "Primary_Area"),
+      topicUz: readSheetValue(record, "Topic_UZ"),
+      clusterId: readSheetValue(record, "Cluster_ID"),
+      mainNodeId: readSheetValue(record, "Main_Node_ID"),
+      sourceProductionId: readSheetValue(record, "Source_Production_ID"),
+      packageObjectiveUz: readSheetValue(record, "Package_Objective_UZ"),
+      proposedContentScopeUz: readSheetValue(record, "Proposed_Content_Scope_UZ"),
+      planningStatus: readSheetValue(record, "Planning_Status") || "Taklif",
+      notesUz: readSheetValue(record, "Notes_UZ"),
+      sourceRecord: record,
+    }] : [];
+  });
+  const launchPreparation: LaunchPreparationItem[] = (tabs.get(LAUNCH_PREPARATION_TAB) ?? []).flatMap((record) => {
+    const preparationId = readSheetValue(record, "Preparation_ID");
+    return preparationId ? [{
+      preparationId,
+      proposedWindowUz: readSheetValue(record, "Proposed_Window_UZ"),
+      stageUz: readSheetValue(record, "Stage_UZ"),
+      primaryRole: readSheetValue(record, "Primary_Role"),
+      workUz: readSheetValue(record, "Work_UZ"),
+      dependencies: splitList(readSheetValue(record, "Dependencies")),
+      completionCriteriaUz: readSheetValue(record, "Completion_Criteria_UZ"),
+      statusUz: readSheetValue(record, "Status_UZ") || "Reja",
+      notesUz: readSheetValue(record, "Notes_UZ"),
+      sourceRecord: record,
+    }] : [];
+  });
+  const topicPackageItems: TopicPackageItem[] = (tabs.get(TOPIC_PACKAGE_ITEMS_TAB) ?? []).flatMap((record) => {
+    const packageItemId = readSheetValue(record, "Package_Item_ID");
+    return packageItemId ? [{
+      packageItemId,
+      packagePlanId: readSheetValue(record, "Package_Plan_ID"),
+      itemOrder: asNumber(readSheetValue(record, "Item_Order")),
+      workflowId: readSheetValue(record, "Workflow_ID"),
+      formatCode: readSheetValue(record, "Format_Code"),
+      workingTitleUz: readSheetValue(record, "Working_Title_UZ"),
+      sourceNodeId: readSheetValue(record, "Source_Node_ID"),
+      sourceProductionId: readSheetValue(record, "Source_Production_ID"),
+      sourcePackageItemId: readSheetValue(record, "Source_Package_Item_ID"),
+      channelAccountIds: splitList(readSheetValue(record, "Channel_Account_IDs")),
+      language: readSheetValue(record, "Language") || "UZ",
+      quantity: Math.max(1, asNumber(readSheetValue(record, "Quantity"), 1)),
+      required: asBoolean(readSheetValue(record, "Required")),
+      approvalStatus: readSheetValue(record, "Approval_Status") || "Taklif",
+      ownerEmployeeId: readSheetValue(record, "Owner_Employee_ID"),
+      targetPublishDate: readSheetValue(record, "Target_Publish_Date"),
+      scheduleLocked: asBoolean(readSheetValue(record, "Schedule_Locked")),
+      runtimeItemId: readSheetValue(record, "Runtime_Item_ID"),
+      active: asBoolean(readSheetValue(record, "Active")),
+      notesUz: readSheetValue(record, "Notes_UZ"),
+      sourceRecord: record,
+    }] : [];
+  });
+  const taskTemplates: TaskTemplateDefinition[] = (tabs.get(TASK_TEMPLATES_TAB) ?? []).flatMap((record) => {
+    const taskTemplateId = readSheetValue(record, "Task_Template_ID");
+    return taskTemplateId ? [{
+      taskTemplateId,
+      taskCode: readSheetValue(record, "Task_Code"),
+      taskNameUz: readSheetValue(record, "Task_Name_UZ") || readSheetValue(record, "Task_Code"),
+      ownerRole: readSheetValue(record, "Owner_Role"),
+      assignmentRuleId: readSheetValue(record, "Assignment_Rule_ID"),
+      estimateMinutes: readSheetValue(record, "Estimate_Minutes") ? asNumber(readSheetValue(record, "Estimate_Minutes")) : null,
+      outputRequired: asBoolean(readSheetValue(record, "Output_Required")),
+      outputUz: readSheetValue(record, "Output_UZ"),
+      scope: readSheetValue(record, "Scope"),
+      approvalPolicyId: readSheetValue(record, "Approval_Policy_ID"),
+      activationCondition: readSheetValue(record, "Activation_Condition"),
+      templateVersion: readSheetValue(record, "Template_Version"),
+      templateStatus: readSheetValue(record, "Template_Status"),
+    }] : [];
+  });
+  const workflowSteps: WorkflowStepDefinition[] = (tabs.get(WORKFLOW_STEPS_TAB) ?? []).flatMap((record) => {
+    const stepId = readSheetValue(record, "Step_ID");
+    return stepId ? [{
+      workflowId: readSheetValue(record, "Workflow_ID"),
+      stepId,
+      stepOrder: asNumber(readSheetValue(record, "Step_Order")),
+      taskTemplateId: readSheetValue(record, "Task_Template_ID"),
+      dependencyStepIds: splitList(readSheetValue(record, "Dependency_Step_IDs")),
+      scope: readSheetValue(record, "Scope"),
+      activationCondition: readSheetValue(record, "Activation_Condition"),
+      approvalPolicyId: readSheetValue(record, "Approval_Policy_ID"),
+      isMilestone: asBoolean(readSheetValue(record, "Is_Milestone")),
+      milestoneUz: readSheetValue(record, "Milestone_UZ"),
+      templateVersion: readSheetValue(record, "Template_Version"),
+      status: readSheetValue(record, "Status"),
+    }] : [];
+  });
   if (!settings.some((item) => item.active)) warnings.push("Production settings faol emas");
   if (!workflow.some((item) => item.active)) warnings.push("Content workflow faol emas");
   if (!publishingRules.some((item) => item.active)) warnings.push("Publishing rules faol emas");
+  if (topicPackages.length && !topicPackages.some((item) => /^(tanlandi|tasdiqlandi|active|selected|approved)$/i.test(item.planningStatus))) warnings.push("Mavzu paketlari hali Taklif holatida; real tasklar yaratilmaydi");
+  if (taskTemplates.some((item) => /^draft$/i.test(item.templateStatus)) || workflowSteps.some((item) => /^draft$/i.test(item.status))) warnings.push("V2 task shablonlari Draft holatida; preview mumkin, runtime aktiv emas");
   return {
     items, contentNodes, tools, taskOverrides, settings, team, workflow, publishingRules, holidays, channels,
+    topicPackages, topicPackageItems, launchPreparation, taskTemplates, workflowSteps,
     canonicalProblems: canonicalProblemsFrom(tabs.get(CANONICAL_TAB) ?? []),
     contentClusters: tabs.get(CONTENT_CLUSTER_TAB) ?? [],
-    meta: { loadedAt: new Date().toISOString(), spreadsheetId, warnings },
+    meta: { loadedAt: new Date().toISOString(), spreadsheetId, warnings, taskWriteMode: "SETUP_REQUIRED" },
   };
 }
 
@@ -510,6 +616,8 @@ export async function loadProductionDataset(force = false) {
     [CONTENT_NODES_TAB, "Node_ID"], [TOOLS_TAB, "Tool_ID"], [PRODUCTION_TAB, "Production_ID"], [SETTINGS_TAB, "Setting_Key"],
     [TEAM_TAB, "Employee_ID"], [WORKFLOW_TAB, "Stage_ID"], [PUBLISHING_TAB, "Rule_ID"],
     [HOLIDAYS_TAB, "Date"], [TASKS_TAB, "Task_ID"], [CANONICAL_TAB, "Canonical_Problem_ID"], [CONTENT_CLUSTER_TAB, "Cluster_ID"], [CHANNELS_TAB, "Channel_Account_ID"],
+    [TASK_TEMPLATES_TAB, "Task_Template_ID"], [WORKFLOW_STEPS_TAB, "Step_ID"], [TOPIC_PACKAGES_TAB, "Package_Plan_ID"], [LAUNCH_PREPARATION_TAB, "Preparation_ID"],
+    [TOPIC_PACKAGE_ITEMS_TAB, "Package_Item_ID"],
   ];
   const { records } = await fetchTabs(spreadsheetId, requirements);
   const dataset = normalizeProductionDataset(records, spreadsheetId);
@@ -517,44 +625,4 @@ export async function loadProductionDataset(force = false) {
   if (errors.length) throw new Error(`Sozlama xatosi: ${errors.join("; ")}`);
   productionCache = { value: dataset, expiresAt: Date.now() + CACHE_MS };
   return dataset;
-}
-
-export async function upsertProductionTaskOverride(input: {
-  taskId: string;
-  productionId: string;
-  stageId: string;
-  status?: ProductionTaskStatus;
-  assigneeId?: string;
-}) {
-  if (!input.taskId || !input.productionId || !input.stageId) throw new Error("Task identifikatorlari yetishmayapti");
-  if (input.status && !/^(pending|in_progress|blocked|done)$/.test(input.status)) throw new Error("Task status noto‘g‘ri");
-  const spreadsheetId = env.GOOGLE_SHEET_ID.trim();
-  const token = await getAccessToken(env.GOOGLE_SERVICE_ACCOUNT_EMAIL.trim(), env.GOOGLE_PRIVATE_KEY);
-  const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  const valuesUrl = (range: string) => `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(range)}`;
-  const indexResponse = await fetchWithTimeout(valuesUrl(`'${TASKS_TAB}'!A5:A5000`), { headers, cache: "no-store" });
-  if (!indexResponse.ok) throw new Error(indexResponse.status === 403 ? "WRITE_ACCESS_REQUIRED" : `Task table read failed (${indexResponse.status})`);
-  const indexPayload = (await indexResponse.json()) as { values?: string[][] };
-  const found = (indexPayload.values ?? []).findIndex((row) => row[0] === input.taskId);
-  const updatedAt = new Date().toISOString();
-  let row = [input.taskId, input.productionId, input.stageId, input.status ?? "pending", input.assigneeId ?? "", "", "", false, "", updatedAt, true];
-  let response: Response;
-  if (found >= 0) {
-    const rowNumber = found + 5;
-    const existingResponse = await fetchWithTimeout(valuesUrl(`'${TASKS_TAB}'!A${rowNumber}:K${rowNumber}`), { headers, cache: "no-store" });
-    if (existingResponse.ok) {
-      const existing = ((await existingResponse.json()) as { values?: Array<Array<string | boolean>> }).values?.[0] ?? [];
-      row = Array.from({ length: 11 }, (_, index) => existing[index] ?? row[index]);
-      row[0] = input.taskId; row[1] = input.productionId; row[2] = input.stageId;
-      if (input.status) row[3] = input.status;
-      if (input.assigneeId !== undefined) row[4] = input.assigneeId;
-      row[9] = updatedAt; row[10] = true;
-    }
-    response = await fetchWithTimeout(`${valuesUrl(`'${TASKS_TAB}'!A${rowNumber}:K${rowNumber}`)}?valueInputOption=USER_ENTERED`, { method: "PUT", headers, body: JSON.stringify({ values: [row] }) });
-  } else {
-    response = await fetchWithTimeout(`${valuesUrl(`'${TASKS_TAB}'!A5:K`)}:append?valueInputOption=USER_ENTERED&insertDataOption=INSERT_ROWS`, { method: "POST", headers, body: JSON.stringify({ values: [row] }) });
-  }
-  if (!response.ok) throw new Error(response.status === 403 ? "WRITE_ACCESS_REQUIRED" : `Task update failed (${response.status})`);
-  productionCache = null;
-  return { taskId: input.taskId, status: input.status, assigneeId: input.assigneeId, updatedAt };
 }

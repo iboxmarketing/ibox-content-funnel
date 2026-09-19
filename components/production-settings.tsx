@@ -15,6 +15,11 @@ const TABS = [
   ["Dam olish kunlari", "21_HOLIDAYS", "Umumiy, rol yoki xodim uchun dam olish kunini qo‘shing.", 210000001],
   ["Jamoa yuklamasi", "18_TEAM_CAPACITY", "Rollar, haftalik soatlar va parallel ish limiti.", 180000001],
   ["Ish bosqichlari", "19_CONTENT_WORKFLOW", "Davomiylik, mas’ul rol va bosqichlar orasidagi bog‘lanishlar.", 190000001],
+  ["Task shablonlari", "23_TASK_TEMPLATES", "Har bir alohida task nomi, taxminiy vaqti, egasi va konfiguratsiya versiyasi.", 32000102],
+  ["Workflow qadamlar", "25_WORKFLOW_STEPS", "Paket materialini Research’dan Publish’gacha alohida tasklarga ajratish qoidalari.", 32000104],
+  ["Mavzu paketlari", "33_TOPIC_PACKAGE_PLAN", "Haftalik mavzular, manba node va ishlab chiqarishga tanlash holati.", 33000201],
+  ["Paket materiallari", "35_TOPIC_PACKAGE_ITEMS", "Har paketdagi blog, video, karusel va postlarni aniq satrlarda boshqarish.", 35000201],
+  ["Ishga tushirish", "34_LAUNCH_PREPARATION", "21-sentabrdan 1-oktabrgacha tayyorgarlik nazorat ro‘yxati.", 33000202],
 ] as const;
 
 export function ProductionSettings({ dataset, baseline, schedule, overrides, onSimulate, onReset }: { dataset: ProductionDataset; baseline: ScheduleResult; schedule: ScheduleResult; overrides: ScheduleOverrides; onSimulate: (value: ScheduleOverrides) => void; onReset: () => void }) {

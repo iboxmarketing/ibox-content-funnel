@@ -14,6 +14,7 @@ import {
   FilterX,
   GitBranch,
   LayoutDashboard,
+  Layers3,
   Maximize2,
   Network,
   RefreshCw,
@@ -73,15 +74,17 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "kanban" | "calendar" | "settings";
+type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
+const TopicPackages = dynamic(() => import("@/components/topic-packages").then((module) => module.TopicPackages), { ssr: false });
 
 const ProductionSettings = dynamic(() => import("@/components/production-settings").then((module) => module.ProductionSettings), { ssr: false });
 
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
   { id: "mindmap", label: "Mind Map", icon: Network },
+  { id: "packages", label: "Mavzu paketlari", icon: Layers3 },
   { id: "kanban", label: "Content Kanban", icon: Columns3 },
   { id: "calendar", label: "Content Calendar", icon: CalendarDays },
   { id: "settings", label: "Sozlamalar", icon: Settings2 },
@@ -147,7 +150,7 @@ function FilterSelect({ value, onValueChange, label, options, className = "" }: 
 function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; spreadsheetIdConfigured: boolean }) {
   const variables = [
     { key: "GOOGLE_SHEET_ID", description: "Google Sheet identifikatori", ready: spreadsheetIdConfigured },
-    { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", description: "Editor sifatida ulashiladigan service-account email", ready: !missing.includes("GOOGLE_SERVICE_ACCOUNT_EMAIL") },
+    { key: "GOOGLE_SERVICE_ACCOUNT_EMAIL", description: "Viewer sifatida ulashiladigan service-account email", ready: !missing.includes("GOOGLE_SERVICE_ACCOUNT_EMAIL") },
     { key: "GOOGLE_PRIVATE_KEY", description: "Service account private key; secret sifatida saqlanadi", ready: !missing.includes("GOOGLE_PRIVATE_KEY") },
   ];
   return (
@@ -156,7 +159,7 @@ function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; s
         <div className="flex size-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700"><Settings2 className="size-6" /></div>
         <Badge variant="outline" className="mt-5 border-amber-200 bg-amber-50 text-amber-700">Google Sheets ulanishi kutilmoqda</Badge>
         <h2 className="mt-3 text-2xl font-bold tracking-[-0.03em] text-slate-950">Tizimni ishga tushirish uchun {missing.length} ta qiymat yetishmayapti</h2>
-        <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Editor</strong> sifatida ulashilgach, sayt ma’lumotlarni serverda o‘qiydi va Kanban task o‘zgarishlarini xavfsiz saqlaydi. Maxfiy kalit brauzerga yuborilmaydi.</p>
+        <p className="mt-2 max-w-xl text-[15px] leading-6 text-slate-600">Google Sheet service-account email bilan <strong>Viewer</strong> sifatida ulashilgach, sayt eng so‘nggi ma’lumotlarni faqat serverda o‘qiydi. Real task va statuslar alohida task bot backendida saqlanadi; maxfiy kalit brauzerga yuborilmaydi.</p>
         <div className="mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200">
           {variables.map((variable) => (
             <div key={variable.key} className="flex items-start gap-3 p-4">
@@ -168,7 +171,7 @@ function SetupState({ missing, spreadsheetIdConfigured }: { missing: string[]; s
             </div>
           ))}
         </div>
-        <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-[13px] leading-5 text-slate-600"><strong>Keyingi qadam:</strong> service-account emailni Google Sheet’ga Editor qilib qo‘shing va yuqoridagi qiymatlarni Site environment variables bo‘limiga kiriting. Ulanishdan keyin xarita avtomatik yangilanadi.</div>
+        <div className="mt-5 rounded-xl bg-slate-50 px-4 py-3 text-[13px] leading-5 text-slate-600"><strong>Keyingi qadam:</strong> service-account emailni Google Sheet’ga Viewer qilib qo‘shing va yuqoridagi qiymatlarni Site environment variables bo‘limiga kiriting. Ulanishdan keyin barcha viewlar avtomatik yangilanadi.</div>
       </div>
     </div>
   );
@@ -513,7 +516,9 @@ export function KnowledgeOS() {
               {simulation && <button className="ml-3 font-semibold underline" onClick={() => setScheduleOverrides({})}>Bekor qilish</button>}
             </div>
             <div className="min-h-0 flex-1">
-            {activeView === "settings" ? <ProductionSettings dataset={production} baseline={baselineSchedule} schedule={productionSchedule} overrides={scheduleOverrides} onSimulate={setScheduleOverrides} onReset={() => setScheduleOverrides({})} /> : activeView === "kanban" ? (
+            {activeView === "settings" ? <ProductionSettings dataset={production} baseline={baselineSchedule} schedule={productionSchedule} overrides={scheduleOverrides} onSimulate={setScheduleOverrides} onReset={() => setScheduleOverrides({})} /> : activeView === "packages" ? (
+              <TopicPackages dataset={effectiveProduction} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
+            ) : activeView === "kanban" ? (
               <ContentKanban simulation={simulation} dataset={effectiveProduction} schedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
             ) : (
               <ContentCalendar onSettings={() => setActiveView("settings")} dataset={effectiveProduction} baseSchedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
