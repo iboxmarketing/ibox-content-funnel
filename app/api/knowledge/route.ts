@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getMissingGoogleConfiguration, loadKnowledgeGraph } from "@/lib/google-sheets";
+import { buildMindMapUiRegressionGraph, isManagedLocalPreview, MINDMAP_UI_FIXTURE_ID } from "@/lib/preview-fixtures";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -7,6 +8,10 @@ export const revalidate = 0;
 const noStoreHeaders = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
 
 export async function GET(request: Request) {
+  const url = new URL(request.url);
+  if (isManagedLocalPreview(request.url) && url.searchParams.get("fixture") === MINDMAP_UI_FIXTURE_ID) {
+    return NextResponse.json({ configured: true, fixture: MINDMAP_UI_FIXTURE_ID, graph: buildMindMapUiRegressionGraph() }, { headers: noStoreHeaders });
+  }
   const missing = getMissingGoogleConfiguration();
   if (missing.length) {
     return NextResponse.json(
@@ -16,7 +21,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const graph = await loadKnowledgeGraph(new URL(request.url).searchParams.get("refresh") === "1");
+    const graph = await loadKnowledgeGraph(url.searchParams.get("refresh") === "1");
     return NextResponse.json({ configured: true, graph }, { headers: noStoreHeaders });
   } catch (error) {
     return NextResponse.json(

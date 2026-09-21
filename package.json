@@ -11,8 +11,14 @@
     "build": "node scripts/run-framework.mjs build",
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
+    "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "test:planning": "node --test tests/planning.test.mjs"
+    "test:planning": "node --test tests/planning.test.mjs",
+    "test:catalog": "node --test tests/catalog-adapter.test.mjs",
+    "test:cta": "node --test tests/cta-destination.test.mjs",
+    "test:assistant": "node --test tests/assistant-context.test.mjs",
+    "test:workplan": "node --test tests/material-workplan.test.mjs",
+    "test:tracking": "node --test tests/tracking-preview.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

@@ -1,5 +1,6 @@
 import "server-only";
 import { validatePlanningConfig } from "./planning-config";
+import { buildCatalogPreview, type CatalogPreview, type CatalogSourceRow, type CatalogTabSnapshot } from "./catalog-adapter";
 
 import { env } from "cloudflare:workers";
 import type {
@@ -19,6 +20,7 @@ import type {
   ProductionHoliday,
   ProductionItem,
   ProductionSetting,
+  ProductionTaskStatus,
   ProductionTaskOverride,
   ProductionTool,
   PublishingRule,
@@ -62,11 +64,41 @@ const WORKFLOW_STEPS_TAB = "25_WORKFLOW_STEPS";
 const TOPIC_PACKAGES_TAB = "33_TOPIC_PACKAGE_PLAN";
 const LAUNCH_PREPARATION_TAB = "34_LAUNCH_PREPARATION";
 const TOPIC_PACKAGE_ITEMS_TAB = "35_TOPIC_PACKAGE_ITEMS";
+const CATALOG_REFERENCE_TABS: Array<[string, string]> = [
+  [CANONICAL_TAB, "Canonical_Problem_ID"],
+  ["11A_CANONICAL_SUBFAMILIES", "Subfamily_ID"],
+  [CONTENT_CLUSTER_TAB, "Cluster_ID"],
+  ["12A_KNOWLEDGE_ARCHITECTURE", "Architecture_ID"],
+  ["12B_KONTENT_TARJIMA", "Cluster_ID"],
+  [CONTENT_NODES_TAB, "Node_ID"],
+  [TOOLS_TAB, "Tool_ID"],
+  ["15_CUSTOMER_JOURNEY_MOF", "Journey_ID"],
+  [SETTINGS_TAB, "Setting_Key"],
+  [TEAM_TAB, "Employee_ID"],
+  [PUBLISHING_TAB, "Rule_ID"],
+  [HOLIDAYS_TAB, "Date"],
+  [CHANNELS_TAB, "Channel_Account_ID"],
+  [TASK_TEMPLATES_TAB, "Task_Template_ID"],
+  ["24_CHECKLIST_TEMPLATES", "Checklist_Template_ID"],
+  [WORKFLOW_STEPS_TAB, "Step_ID"],
+  ["26_APPROVAL_POLICIES", "Approval_Policy_ID"],
+  ["27_ASSIGNMENT_RULES", "Assignment_Rule_ID"],
+  ["28_NOTIFICATION_RULES", "Rule_ID"],
+  ["29_SHEET_DB_CONTRACT", "Contract_ID"],
+  ["95_UI_LUGAT", "Key"],
+  ["96_TAXONOMY", "Taxonomy_Type"],
+  ["98_ATAMALAR", "O‘zbekcha atama"],
+];
+const CATALOG_PRIMARY_TABS: Array<[string, string]> = [
+  [TOPIC_PACKAGES_TAB, "Package_Plan_ID"],
+  [TOPIC_PACKAGE_ITEMS_TAB, "Package_Item_ID"],
+];
 const CACHE_MS = 20_000;
 
 let tokenCache: { value: string; expiresAt: number } | null = null;
 let graphCache: { value: KnowledgeGraph; expiresAt: number } | null = null;
 let productionCache: { value: ProductionDataset; expiresAt: number } | null = null;
+let catalogCache: { value: CatalogPreview; expiresAt: number } | null = null;
 
 function base64Url(input: Uint8Array | string) {
   const bytes = typeof input === "string" ? new TextEncoder().encode(input) : input;
@@ -139,8 +171,8 @@ export function readSheetValue(record: SheetRecord, ...aliases: string[]) {
   return "";
 }
 
-export function recordsFromValues(values: unknown[][] | undefined, requiredHeader?: string) {
-  if (!values?.length) return { records: [] as SheetRecord[], headers: [] as string[] };
+function parseSheetValues(values: unknown[][] | undefined, requiredHeader?: string) {
+  if (!values?.length) return { records: [] as SheetRecord[], headers: [] as string[], headerIndex: 0, rowsWithRecords: [] as Array<{ record: SheetRecord; sourceRow: number }> };
   const required = requiredHeader ? normalizeSheetKey(requiredHeader) : "";
   let headerIndex = 0;
   if (required) {
@@ -148,7 +180,7 @@ export function recordsFromValues(values: unknown[][] | undefined, requiredHeade
     if (found >= 0) headerIndex = found;
   }
   const headers = values[headerIndex].map((value) => String(value ?? "").trim());
-  const records = values.slice(headerIndex + 1).flatMap((row) => {
+  const rowsWithRecords = values.slice(headerIndex + 1).flatMap((row, dataIndex) => {
     const record: SheetRecord = {};
     let hasValue = false;
     headers.forEach((header, index) => {
@@ -157,9 +189,14 @@ export function recordsFromValues(values: unknown[][] | undefined, requiredHeade
       if (value) hasValue = true;
       record[header] = value;
     });
-    return hasValue ? [record] : [];
+    return hasValue ? [{ record, sourceRow: headerIndex + dataIndex + 2 }] : [];
   });
-  return { records, headers };
+  return { records: rowsWithRecords.map((item) => item.record), headers, headerIndex, rowsWithRecords };
+}
+
+export function recordsFromValues(values: unknown[][] | undefined, requiredHeader?: string) {
+  const parsed = parseSheetValues(values, requiredHeader);
+  return { records: parsed.records, headers: parsed.headers };
 }
 
 function asBoolean(value: string) {
@@ -197,12 +234,51 @@ async function fetchTabs(spreadsheetId: string, tabRequirements: Array<[string, 
   const payload = (await response.json()) as { valueRanges?: Array<{ values?: unknown[][] }> };
   const records = new Map<string, SheetRecord[]>();
   const headers = new Map<string, string[]>();
+  const sourceRows = new Map<string, CatalogSourceRow[]>();
   tabRequirements.forEach(([tab, requiredHeader], index) => {
-    const parsed = recordsFromValues(payload.valueRanges?.[index]?.values, requiredHeader);
+    const parsed = parseSheetValues(payload.valueRanges?.[index]?.values, requiredHeader);
     records.set(tab, parsed.records);
     headers.set(tab, parsed.headers);
+    sourceRows.set(tab, parsed.rowsWithRecords.map(({ record, sourceRow }) => ({
+      sourceTab: tab,
+      sourceRow,
+      sourceId: tab === "96_TAXONOMY"
+        ? `${readSheetValue(record, "Taxonomy_Type")}::${readSheetValue(record, "Value")}`
+        : readSheetValue(record, requiredHeader) || `${tab}:unkeyed:${stableRecordKey(record)}`,
+      raw: record,
+    })));
   });
-  return { records, headers };
+  return { records, headers, sourceRows };
+}
+
+function stableRecordKey(record: SheetRecord) {
+  const input = Object.entries(record).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join("|");
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+async function fetchSheetMetadata(spreadsheetId: string) {
+  const token = await getAccessToken(env.GOOGLE_SERVICE_ACCOUNT_EMAIL.trim(), env.GOOGLE_PRIVATE_KEY);
+  const url = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}`);
+  url.searchParams.set("fields", "properties(title,locale,timeZone),sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)))");
+  const response = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token}` }, cache: "no-store" });
+  if (!response.ok) throw new Error(`Google Sheets metadata request failed (${response.status})`);
+  const payload = (await response.json()) as {
+    sheets?: Array<{ properties?: { sheetId?: number; title?: string; gridProperties?: { rowCount?: number; columnCount?: number } } }>;
+  };
+  return new Map((payload.sheets ?? []).flatMap((sheet) => {
+    const title = sheet.properties?.title;
+    if (!title) return [];
+    return [[title, {
+      sheetId: sheet.properties?.sheetId ?? null,
+      rowCount: sheet.properties?.gridProperties?.rowCount ?? null,
+      columnCount: sheet.properties?.gridProperties?.columnCount ?? null,
+    }] as const];
+  }));
 }
 
 function canonicalProblemsFrom(records: SheetRecord[]): CanonicalProblem[] {
@@ -625,4 +701,32 @@ export async function loadProductionDataset(force = false) {
   if (errors.length) throw new Error(`Sozlama xatosi: ${errors.join("; ")}`);
   productionCache = { value: dataset, expiresAt: Date.now() + CACHE_MS };
   return dataset;
+}
+
+export async function loadCatalogPreview(force = false) {
+  if (!force && catalogCache && catalogCache.expiresAt > Date.now()) return catalogCache.value;
+  const spreadsheetId = env.GOOGLE_SHEET_ID.trim();
+  const metadata = await fetchSheetMetadata(spreadsheetId);
+  const requirements = [...CATALOG_REFERENCE_TABS, ...CATALOG_PRIMARY_TABS];
+  const availableRequirements = requirements.filter(([tab]) => metadata.has(tab));
+  const { headers, sourceRows } = await fetchTabs(spreadsheetId, availableRequirements);
+  const tabs: CatalogTabSnapshot[] = requirements.map(([title]) => {
+    const sheet = metadata.get(title);
+    return {
+      title,
+      sheetId: sheet?.sheetId ?? null,
+      rowCount: sheet?.rowCount ?? null,
+      columnCount: sheet?.columnCount ?? null,
+      headers: headers.get(title) ?? [],
+      rows: sourceRows.get(title) ?? [],
+    };
+  });
+  const preview = buildCatalogPreview({
+    spreadsheetId,
+    capturedAt: new Date().toISOString(),
+    tabs,
+    backendProjection: { available: false, realTaskCount: null },
+  });
+  catalogCache = { value: preview, expiresAt: Date.now() + CACHE_MS };
+  return preview;
 }

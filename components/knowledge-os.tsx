@@ -51,6 +51,12 @@ import {
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { CatalogPreview } from "@/lib/catalog-adapter";
+import type { DemoCp070Catalog } from "@/lib/catalog-fixtures";
+import type { CtaDestinationPreviewFixture } from "@/lib/cta-destination-fixtures";
+import type { AssistantContextPreviewFixture } from "@/lib/assistant-context-fixtures";
+import type { MaterialWorkplanPreviewFixture } from "@/lib/material-workplan-fixtures";
+import type { TrackingPreviewFixture } from "@/lib/tracking-preview-fixtures";
 import type { KnowledgeApiResponse, KnowledgeGraph } from "@/lib/knowledge-types";
 import { applyScheduleOverrides, recalculateSchedule, type ScheduleOverrides } from "@/lib/scheduling-engine";
 import type { ProductionApiResponse, ProductionDataset } from "@/lib/production-types";
@@ -96,6 +102,10 @@ const FUTURE_VIEWS = [
   { label: "Customer Journey / MOF", icon: GitBranch },
   { label: "Dashboard", icon: LayoutDashboard },
 ];
+
+function localPreviewFixture(name: "MINDMAP_UI_REGRESSION" | "REAL_SNAPSHOT_REGRESSION") {
+  return typeof window !== "undefined" && window.location.hostname === "terminal.local" ? name : null;
+}
 
 function normalized(value: string) {
   return value.toLocaleLowerCase("uz").replace(/[’‘`ʻʼ]/g, "'").trim();
@@ -196,12 +206,21 @@ export function KnowledgeOS() {
   const [activeView, setActiveView] = useState<MainView>("mindmap");
   const [graph, setGraph] = useState<KnowledgeGraph | null>(null);
   const [production, setProduction] = useState<ProductionDataset | null>(null);
+  const [catalogPreview, setCatalogPreview] = useState<CatalogPreview | null>(null);
+  const [catalogDemo, setCatalogDemo] = useState<DemoCp070Catalog | null>(null);
+  const [ctaPreview, setCtaPreview] = useState<CtaDestinationPreviewFixture | null>(null);
+  const [assistantPreview, setAssistantPreview] = useState<AssistantContextPreviewFixture | null>(null);
+  const [materialWorkplanPreview, setMaterialWorkplanPreview] = useState<MaterialWorkplanPreviewFixture | null>(null);
+  const [trackingPreview, setTrackingPreview] = useState<TrackingPreviewFixture | null>(null);
+  const [catalogOrigin, setCatalogOrigin] = useState<"LOCAL_REGRESSION_FIXTURE" | "CONNECTOR_LIVE_READ">("LOCAL_REGRESSION_FIXTURE");
   const [setup, setSetup] = useState<{ missing: string[]; spreadsheetIdConfigured: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [lastSynced, setLastSynced] = useState<string | null>(null);
   const [productionSynced, setProductionSynced] = useState<string | null>(null);
+  const [catalogSynced, setCatalogSynced] = useState<string | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [searchQuery, setSearchQuery] = useState("");
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -218,7 +237,11 @@ export function KnowledgeOS() {
   const loadData = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const response = await fetch(`/api/knowledge${manual ? "?refresh=1" : ""}`, { cache: "no-store" });
+      const params = new URLSearchParams();
+      if (manual) params.set("refresh", "1");
+      const fixture = localPreviewFixture("MINDMAP_UI_REGRESSION");
+      if (fixture) params.set("fixture", fixture);
+      const response = await fetch(`/api/knowledge?${params.toString()}`, { cache: "no-store" });
       const payload = await response.json() as KnowledgeApiResponse & { error?: string };
       if (!response.ok) throw new Error(payload.error || "Google Sheets bilan sinxronlash amalga oshmadi");
       if (!payload.configured) {
@@ -265,6 +288,47 @@ export function KnowledgeOS() {
     }
   }, []);
 
+  const loadCatalog = useCallback(async (manual = false) => {
+    if (manual) setRefreshing(true);
+    try {
+      const params = new URLSearchParams();
+      if (manual) params.set("refresh", "1");
+      const fixture = localPreviewFixture("REAL_SNAPSHOT_REGRESSION");
+      if (fixture) params.set("fixture", fixture);
+      const response = await fetch(`/api/catalog-preview?${params.toString()}`, { cache: "no-store" });
+      const payload = await response.json() as (
+        | { configured: true; origin: "LOCAL_REGRESSION_FIXTURE" | "CONNECTOR_LIVE_READ"; preview: CatalogPreview; demo: DemoCp070Catalog; ctaPreview: CtaDestinationPreviewFixture; assistantPreview: AssistantContextPreviewFixture; materialWorkplanPreview: MaterialWorkplanPreviewFixture; trackingPreview: TrackingPreviewFixture; error?: string }
+        | { configured: false; missing: string[]; spreadsheetIdConfigured: boolean; error?: string }
+      );
+      if (!response.ok) throw new Error(payload.error || "Catalog preview bilan sinxronlash amalga oshmadi");
+      if (!payload.configured) {
+        setSetup({ missing: payload.missing, spreadsheetIdConfigured: payload.spreadsheetIdConfigured });
+        setCatalogPreview(null);
+        setCatalogDemo(null);
+        setCtaPreview(null);
+        setAssistantPreview(null);
+        setMaterialWorkplanPreview(null);
+        setTrackingPreview(null);
+      } else {
+        setCatalogPreview(payload.preview);
+        setCatalogDemo(payload.demo);
+        setCtaPreview(payload.ctaPreview);
+        setAssistantPreview(payload.assistantPreview);
+        setMaterialWorkplanPreview(payload.materialWorkplanPreview);
+        setTrackingPreview(payload.trackingPreview);
+        setCatalogOrigin(payload.origin);
+        setCatalogSynced(payload.preview.sourceSnapshot.capturedAt);
+        setSetup(null);
+        setCatalogError(null);
+      }
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : "Catalog preview sinxronlashda xatolik yuz berdi");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
+
   useEffect(() => {
     // Data fetching is an external subscription to the Sheet-backed API.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -274,13 +338,22 @@ export function KnowledgeOS() {
   }, [loadData]);
 
   useEffect(() => {
-    if (activeView === "mindmap") return;
+    if (activeView === "mindmap" || activeView === "packages") return;
     // Load production data only when an operational view is opened.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadProduction();
     const interval = window.setInterval(() => void loadProduction(), 60_000);
     return () => window.clearInterval(interval);
   }, [activeView, loadProduction]);
+
+  useEffect(() => {
+    if (activeView !== "packages") return;
+    // Catalog preview has its own 13/33/35 + 23–29 adapter and never falls back to 16/19/22.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadCatalog();
+    const interval = window.setInterval(() => void loadCatalog(), 60_000);
+    return () => window.clearInterval(interval);
+  }, [activeView, loadCatalog]);
 
   const baselineSchedule = useMemo(() => production ? recalculateSchedule(production) : null, [production]);
   const effectiveProduction = useMemo(() => production ? applyScheduleOverrides(production, scheduleOverrides) : null, [production, scheduleOverrides]);
@@ -436,7 +509,7 @@ export function KnowledgeOS() {
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter className="border-t border-white/10 p-3">
-          <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError ? "bg-amber-400" : graph || production ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError ? "Sync warning" : graph || production ? "Google Sheets connected" : "Setup required"}</span></div>
+          <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError || catalogError ? "bg-amber-400" : graph || production || catalogPreview ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError || catalogError ? "Sync warning" : graph || production || catalogPreview ? "Google Sheets connected" : "Setup required"}</span></div>
         </SidebarFooter>
       </Sidebar>
 
@@ -508,7 +581,15 @@ export function KnowledgeOS() {
 
           {syncError && graph && <button type="button" onClick={() => void loadData(true)} className="absolute right-5 top-4 z-30 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
         </main>
-        </> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
+        </> : activeView === "packages" ? setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : catalogPreview && catalogDemo && ctaPreview && assistantPreview && materialWorkplanPreview && trackingPreview ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <TopicPackages preview={catalogPreview} demo={catalogDemo} ctaPreview={ctaPreview} assistantPreview={assistantPreview} materialWorkplanPreview={materialWorkplanPreview} trackingPreview={trackingPreview} snapshotOrigin={catalogOrigin} onRefresh={() => void loadCatalog(true)} refreshing={refreshing} lastSynced={catalogSynced ?? catalogPreview.sourceSnapshot.capturedAt} />
+            {catalogError && <button type="button" onClick={() => void loadCatalog(true)} className="absolute right-5 top-16 z-50 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry <span className="max-w-sm truncate" title={catalogError}>{catalogError}</span></button>}
+          </div>
+        ) : catalogError ? (
+          <div className="flex h-full items-center justify-center bg-slate-50"><div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Catalog preview yuklanmadi</h2><p className="mt-2 text-sm text-slate-500">{catalogError}</p><Button className="mt-4" onClick={() => void loadCatalog(true)}>Qayta urinish</Button></div></div>
+        ) : <LoadingState /> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
           <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
             <div className={`shrink-0 border-b px-5 py-2 text-sm ${simulation ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
@@ -516,9 +597,7 @@ export function KnowledgeOS() {
               {simulation && <button className="ml-3 font-semibold underline" onClick={() => setScheduleOverrides({})}>Bekor qilish</button>}
             </div>
             <div className="min-h-0 flex-1">
-            {activeView === "settings" ? <ProductionSettings dataset={production} baseline={baselineSchedule} schedule={productionSchedule} overrides={scheduleOverrides} onSimulate={setScheduleOverrides} onReset={() => setScheduleOverrides({})} /> : activeView === "packages" ? (
-              <TopicPackages dataset={effectiveProduction} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
-            ) : activeView === "kanban" ? (
+            {activeView === "settings" ? <ProductionSettings dataset={production} baseline={baselineSchedule} schedule={productionSchedule} overrides={scheduleOverrides} onSimulate={setScheduleOverrides} onReset={() => setScheduleOverrides({})} /> : activeView === "kanban" ? (
               <ContentKanban simulation={simulation} dataset={effectiveProduction} schedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />
             ) : (
               <ContentCalendar onSettings={() => setActiveView("settings")} dataset={effectiveProduction} baseSchedule={productionSchedule} onRefresh={() => void loadProduction(true)} refreshing={refreshing} lastSynced={productionSynced ?? production.meta.loadedAt} />

@@ -278,10 +278,17 @@ const GraphNode = memo(function GraphNode({
     const item = indexes.processById.get(node.id)!;
     const problemCount = item.problemIds.filter((id) => visibleProblemIds.has(id)).length;
     return (
-      <button
+      <div
         data-node
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={() => onProcessSelect(item.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onProcessSelect(item.id);
+          }
+        }}
         className={`absolute flex cursor-pointer flex-col rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-[0_3px_12px_rgba(16,24,40,.05)] transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-[0_8px_24px_rgba(16,24,40,.09)] ${highlightClass}`}
         style={commonStyle}
       >
@@ -300,7 +307,7 @@ const GraphNode = memo(function GraphNode({
           <span className="truncate font-medium">{item.masul || "Mas’ul ko‘rsatilmagan"}</span>
           <span className="shrink-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 font-semibold text-slate-700">{problemCount} muammo</span>
         </div>
-      </button>
+      </div>
     );
   }
 
@@ -465,8 +472,8 @@ export function KnowledgeCanvas({
   }, []);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("[data-node],[data-canvas-control]")) return;
     event.currentTarget.focus({ preventScroll: true });
-    if ((event.target as HTMLElement).closest("[data-node]")) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, originX: transform.x, originY: transform.y };
   };
@@ -537,16 +544,17 @@ export function KnowledgeCanvas({
         ))}
       </div>
 
-      <div className="absolute bottom-5 left-5 flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1.5 shadow-[0_10px_32px_rgba(15,23,42,.12)] backdrop-blur">
+      <div data-canvas-control className="absolute bottom-5 left-5 flex items-center gap-1 rounded-xl border border-slate-200/90 bg-white/95 p-1.5 shadow-[0_10px_32px_rgba(15,23,42,.12)] backdrop-blur" onPointerDown={(event) => event.stopPropagation()}>
         <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => zoomAtCenter(1.18)} aria-label="Kattalashtirish"><Plus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kattalashtirish</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => zoomAtCenter(0.84)} aria-label="Kichraytirish"><Minus className="size-4" /></Button></TooltipTrigger><TooltipContent>Kichraytirish</TooltipContent></Tooltip>
-        <span className="min-w-14 rounded-md bg-slate-900 px-2 py-1.5 text-center text-[11px] font-bold tabular-nums text-white">{Math.round(transform.scale * 100)}%</span>
+        <span data-zoom-percent className="min-w-14 rounded-md bg-slate-900 px-2 py-1.5 text-center text-[11px] font-bold tabular-nums text-white">{Math.round(transform.scale * 100)}%</span>
         <div className="mx-1 h-5 w-px bg-slate-200" />
         <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={fitView} aria-label="Ekranga sig‘dirish"><Maximize2 className="size-4" /></Button></TooltipTrigger><TooltipContent>Ekranga sig‘dirish</TooltipContent></Tooltip>
         <Tooltip><TooltipTrigger asChild><Button size="icon" variant="ghost" className="size-9 rounded-lg text-slate-600 hover:bg-blue-50 hover:text-blue-700" onClick={() => setTransform({ x: 30, y: 30, scale: 1 })} aria-label="Ko‘rinishni tiklash"><LocateFixed className="size-4" /></Button></TooltipTrigger><TooltipContent>Ko‘rinishni tiklash</TooltipContent></Tooltip>
       </div>
 
       <button
+        data-canvas-control
         type="button"
         aria-label="Mini xarita orqali markazlash"
         className="absolute bottom-5 right-5 hidden h-[120px] w-[210px] overflow-hidden rounded-xl border border-slate-200 bg-white/95 shadow-[0_8px_30px_rgba(16,24,40,.10)] backdrop-blur md:block"
