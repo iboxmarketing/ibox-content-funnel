@@ -53,18 +53,22 @@ test("SupabaseRepository's constructor defaults its contract to pendingSchemaCon
   assert.doesNotMatch(repoText, /=\s*\{[^}]*status:\s*"READY"/s);
 });
 
-test("the task client has exactly one concrete implementation (no second writable task source)", () => {
-  const clientText = readFileSync(join(REPO_ROOT, "lib/task-client.ts"), "utf8");
-  const implementCount = (clientText.match(/implements TaskClient/g) ?? []).length;
-  assert.equal(implementCount, 1);
+test("only the reviewed TaskClient implementations exist -- no undocumented second writable task source", () => {
+  // lib/task-client.ts (BlockedTaskClient, the only default) and
+  // lib/task-client-http.ts (HttpTaskClient, real-wire but never defaulted
+  // and never called from production code -- see
+  // task-client-http-security.test.mjs) are the two reviewed
+  // implementations. Any other file implementing TaskClient is unreviewed.
+  const knownImplementationFiles = new Set(["lib/task-client.ts", "lib/task-client-http.ts"]);
 
-  const otherOffenders = allSourceFiles
-    .filter((f) => !f.endsWith("lib/task-client.ts") && !f.endsWith("lib/task-client-types.ts"))
+  const implementingFiles = allSourceFiles
     .filter((f) => {
       const text = readFileSync(f, "utf8");
       return /implements\s+TaskClient\b/.test(text);
-    });
-  assert.deepEqual(otherOffenders.map((f) => relative(REPO_ROOT, f)), []);
+    })
+    .map((f) => relative(REPO_ROOT, f));
+
+  assert.deepEqual(implementingFiles.sort(), [...knownImplementationFiles].sort());
 });
 
 test("the task client stub never hardcodes an HTTP call to a guessed endpoint", () => {
