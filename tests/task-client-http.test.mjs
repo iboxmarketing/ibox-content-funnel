@@ -8,7 +8,7 @@ import { join } from "node:path";
 import ts from "typescript";
 
 const dir = mkdtempSync(join(tmpdir(), "ibox-task-client-http-"));
-for (const name of ["task-client-types", "task-client-http-config", "task-client-http"]) {
+for (const name of ["task-client-types", "task-backend-wire-mapping", "task-client-http-config", "task-client-http"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8");
   writeFileSync(join(dir, `${name}.js`), ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 }

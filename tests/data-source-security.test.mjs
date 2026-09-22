@@ -54,12 +54,19 @@ test("SupabaseRepository's constructor defaults its contract to pendingSchemaCon
 });
 
 test("only the reviewed TaskClient implementations exist -- no undocumented second writable task source", () => {
-  // lib/task-client.ts (BlockedTaskClient, the only default) and
-  // lib/task-client-http.ts (HttpTaskClient, real-wire but never defaulted
-  // and never called from production code -- see
-  // task-client-http-security.test.mjs) are the two reviewed
-  // implementations. Any other file implementing TaskClient is unreviewed.
-  const knownImplementationFiles = new Set(["lib/task-client.ts", "lib/task-client-http.ts"]);
+  // lib/task-client.ts (BlockedTaskClient, the only default),
+  // lib/task-client-http.ts (HttpTaskClient, cookie-impersonation AUTH_GAP
+  // demonstration) and lib/task-client-signed-service.ts
+  // (SignedServiceTaskClient, the real signed server-to-server protocol) are
+  // the three reviewed implementations -- none is ever the default and none
+  // has a production call site (see task-client-http-security.test.mjs and
+  // task-client-signed-service-security.test.mjs). Any other file
+  // implementing TaskClient is unreviewed.
+  const knownImplementationFiles = new Set([
+    "lib/task-client.ts",
+    "lib/task-client-http.ts",
+    "lib/task-client-signed-service.ts",
+  ]);
 
   const implementingFiles = allSourceFiles
     .filter((f) => {

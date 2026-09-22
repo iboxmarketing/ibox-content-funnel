@@ -27,7 +27,11 @@
     "test:task-client": "node --test tests/task-client.test.mjs",
     "test:task-client-http-config": "node --test tests/task-client-http-config.test.mjs",
     "test:task-client-http": "node --test tests/task-client-http.test.mjs",
-    "test:task-client-http-security": "node --test tests/task-client-http-security.test.mjs"
+    "test:task-client-http-security": "node --test tests/task-client-http-security.test.mjs",
+    "test:content-os-task-backend-signer": "node --test tests/content-os-task-backend-signer.test.mjs",
+    "test:task-backend-service-auth-config": "node --test tests/task-backend-service-auth-config.test.mjs",
+    "test:task-client-signed-service": "node --test tests/task-client-signed-service.test.mjs",
+    "test:task-client-signed-service-security": "node --test tests/task-client-signed-service-security.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

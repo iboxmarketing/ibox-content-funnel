@@ -1,4 +1,12 @@
 import type { TaskBackendHttpConfig } from "./task-client-http-config";
+import {
+  ACTION_FOR_UNAMBIGUOUS_STATUS,
+  AMBIGUOUS_TRANSITION_MESSAGE,
+  AmbiguousTransitionError,
+  TaskBackendHttpError,
+  mapBotTask,
+  parseTaskBackendResponse,
+} from "./task-backend-wire-mapping";
 import type {
   CreateTaskBackendTaskInput,
   DeadlineChangeRequestInput,
@@ -6,6 +14,8 @@ import type {
   TaskBackendTask,
   TaskClient,
 } from "./task-client-types";
+
+export { AmbiguousTransitionError, TaskBackendHttpError };
 
 /**
  * TaskClient wired to marketing-team-task-bot's real, read-only-audited HTTP
@@ -38,61 +48,7 @@ import type {
  *    AmbiguousTransitionError rather than guessing; callers that know the
  *    current status should call `accept()` directly or extend this method.
  */
-export class TaskBackendHttpError extends Error {
-  readonly code: string;
-  readonly status: number;
-  readonly issues?: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string }>;
-
-  constructor(
-    status: number,
-    code: string,
-    message: string,
-    issues?: ReadonlyArray<{ path: ReadonlyArray<string | number>; message: string }>,
-  ) {
-    super(message);
-    this.name = "TaskBackendHttpError";
-    this.status = status;
-    this.code = code;
-    this.issues = issues;
-  }
-}
-
-export class AmbiguousTransitionError extends Error {
-  readonly code = "AMBIGUOUS_TRANSITION";
-  constructor(message: string) {
-    super(message);
-    this.name = "AmbiguousTransitionError";
-  }
-}
-
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
-
-// Reverse of marketing-team-task-bot's src/domain/workflow.ts TARGET_STATUS.
-// IN_PROGRESS is deliberately absent -- see the class doc comment.
-const ACTION_FOR_UNAMBIGUOUS_STATUS: Partial<Record<TaskBackendStatus, string>> = {
-  BLOCKED: "BLOCK",
-  REVIEW: "SUBMIT_REVIEW",
-  DONE: "APPROVE",
-  REVISION: "REQUEST_REVISION",
-  CANCELLED: "CANCEL",
-  ASSIGNED: "REOPEN",
-};
-
-function mapBotTask(raw: Record<string, unknown>): TaskBackendTask {
-  return {
-    id: String(raw.id),
-    title: String(raw.title),
-    description: (raw.description as string | null) ?? null,
-    priority: raw.priority as TaskBackendTask["priority"],
-    status: raw.status as TaskBackendStatus,
-    assigneeId: String(raw.assigneeId),
-    creatorId: String(raw.creatorId),
-    deadline: String(raw.deadline),
-    // Not part of marketing-team-task-bot's TaskSchema today -- no bridge
-    // column exists yet, so this is always null, never guessed from raw data.
-    contentRef: null,
-  };
-}
 
 export class HttpTaskClient implements TaskClient {
   constructor(
@@ -109,19 +65,7 @@ export class HttpTaskClient implements TaskClient {
         ...init.headers,
       },
     });
-
-    const text = await response.text();
-    const body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-
-    if (!response.ok) {
-      throw new TaskBackendHttpError(
-        response.status,
-        typeof body.code === "string" ? body.code : "UNKNOWN_ERROR",
-        typeof body.error === "string" ? body.error : `Request failed with status ${response.status}.`,
-        body.issues as TaskBackendHttpError["issues"],
-      );
-    }
-    return body;
+    return parseTaskBackendResponse(response);
   }
 
   async create(input: CreateTaskBackendTaskInput): Promise<TaskBackendTask> {
@@ -158,10 +102,7 @@ export class HttpTaskClient implements TaskClient {
   async transition(taskId: string, _actorId: string, newStatus: TaskBackendStatus, reason?: string): Promise<TaskBackendTask> {
     const action = ACTION_FOR_UNAMBIGUOUS_STATUS[newStatus];
     if (!action) {
-      throw new AmbiguousTransitionError(
-        `Cannot determine a single task-bot action for target status "${newStatus}" without the task's current status ` +
-          '(IN_PROGRESS is reached by ACCEPT from ASSIGNED or RESUME from BLOCKED/REVISION). Call accept() directly, or extend this method with the current status.',
-      );
+      throw new AmbiguousTransitionError(AMBIGUOUS_TRANSITION_MESSAGE);
     }
     return this.performAction(taskId, action, reason);
   }
