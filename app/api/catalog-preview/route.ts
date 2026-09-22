@@ -5,13 +5,22 @@ import { buildDemoCp070CtaPreview } from "@/lib/cta-destination-fixtures";
 import { buildAssistantContextPreview } from "@/lib/assistant-context-fixtures";
 import { buildMaterialWorkplanPreview } from "@/lib/material-workplan-fixtures";
 import { buildTrackingPreview } from "@/lib/tracking-preview-fixtures";
-import { getMissingGoogleConfiguration, loadCatalogPreview } from "@/lib/google-sheets";
+import { getCatalogRepository, getDataSourceMode, getSupabaseCatalogRepository } from "@/lib/data-source";
+import { loadForRoute } from "@/lib/data-source-route-outcome";
 import { buildRealSnapshotRegressionPreview, isManagedLocalPreview, REAL_SNAPSHOT_FIXTURE_ID } from "@/lib/preview-fixtures";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const noStoreHeaders = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
+
+const fixturePreviews = () => ({
+  demo: buildDemoCp070Catalog(),
+  ctaPreview: buildDemoCp070CtaPreview(),
+  assistantPreview: buildAssistantContextPreview(),
+  materialWorkplanPreview: buildMaterialWorkplanPreview(),
+  trackingPreview: buildTrackingPreview(),
+});
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -21,31 +30,34 @@ export async function GET(request: Request) {
       fixture: REAL_SNAPSHOT_FIXTURE_ID,
       origin: "LOCAL_REGRESSION_FIXTURE",
       preview: buildRealSnapshotRegressionPreview(),
-      demo: buildDemoCp070Catalog(),
-      ctaPreview: buildDemoCp070CtaPreview(),
-      assistantPreview: buildAssistantContextPreview(),
-      materialWorkplanPreview: buildMaterialWorkplanPreview(),
-      trackingPreview: buildTrackingPreview(),
+      ...fixturePreviews(),
     }, { headers: noStoreHeaders });
   }
-  const missing = getMissingGoogleConfiguration();
-  if (missing.length) {
-    return NextResponse.json(
-      { configured: false, missing, spreadsheetIdConfigured: !missing.includes("GOOGLE_SHEET_ID") },
-      { headers: noStoreHeaders },
-    );
-  }
+
   try {
-    const preview = await loadCatalogPreview(url.searchParams.get("refresh") === "1");
+    const mode = getDataSourceMode();
+    const outcome = await loadForRoute(
+      mode,
+      getCatalogRepository(),
+      getSupabaseCatalogRepository(),
+      url.searchParams.get("refresh") === "1",
+    );
+
+    if (outcome.kind === "NOT_CONFIGURED") {
+      return NextResponse.json(
+        { configured: false, missing: outcome.missing, spreadsheetIdConfigured: !outcome.missing.includes("GOOGLE_SHEET_ID") },
+        { headers: noStoreHeaders },
+      );
+    }
+    if (outcome.kind === "SCHEMA_NOT_READY") {
+      return NextResponse.json({ configured: false, error: outcome.message, code: "SCHEMA_CONTRACT_NOT_READY" }, { status: 503, headers: noStoreHeaders });
+    }
     return NextResponse.json({
       configured: true,
       origin: "CONNECTOR_LIVE_READ",
-      preview,
-      demo: buildDemoCp070Catalog(),
-      ctaPreview: buildDemoCp070CtaPreview(),
-      assistantPreview: buildAssistantContextPreview(),
-      materialWorkplanPreview: buildMaterialWorkplanPreview(),
-      trackingPreview: buildTrackingPreview(),
+      preview: outcome.data,
+      ...(outcome.dataSourceDiagnostic ? { dataSourceDiagnostic: outcome.dataSourceDiagnostic } : {}),
+      ...fixturePreviews(),
     }, { headers: noStoreHeaders });
   } catch (error) {
     return NextResponse.json(

@@ -18,7 +18,13 @@
     "test:cta": "node --test tests/cta-destination.test.mjs",
     "test:assistant": "node --test tests/assistant-context.test.mjs",
     "test:workplan": "node --test tests/material-workplan.test.mjs",
-    "test:tracking": "node --test tests/tracking-preview.test.mjs"
+    "test:tracking": "node --test tests/tracking-preview.test.mjs",
+    "test:data-source-config": "node --test tests/data-source-config.test.mjs",
+    "test:data-source-repositories": "node --test tests/data-source-repositories.test.mjs",
+    "test:data-source-route-outcome": "node --test tests/data-source-route-outcome.test.mjs",
+    "test:data-source-reconciliation": "node --test tests/data-source-reconciliation.test.mjs",
+    "test:data-source-security": "node --test tests/data-source-security.test.mjs",
+    "test:task-client": "node --test tests/task-client.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

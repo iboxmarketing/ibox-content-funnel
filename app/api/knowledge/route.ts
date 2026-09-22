@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getMissingGoogleConfiguration, loadKnowledgeGraph } from "@/lib/google-sheets";
+import { getDataSourceMode, getKnowledgeRepository, getSupabaseKnowledgeRepository } from "@/lib/data-source";
+import { loadForRoute } from "@/lib/data-source-route-outcome";
 import { buildMindMapUiRegressionGraph, isManagedLocalPreview, MINDMAP_UI_FIXTURE_ID } from "@/lib/preview-fixtures";
 
 export const dynamic = "force-dynamic";
@@ -12,17 +13,29 @@ export async function GET(request: Request) {
   if (isManagedLocalPreview(request.url) && url.searchParams.get("fixture") === MINDMAP_UI_FIXTURE_ID) {
     return NextResponse.json({ configured: true, fixture: MINDMAP_UI_FIXTURE_ID, graph: buildMindMapUiRegressionGraph() }, { headers: noStoreHeaders });
   }
-  const missing = getMissingGoogleConfiguration();
-  if (missing.length) {
-    return NextResponse.json(
-      { configured: false, missing, spreadsheetIdConfigured: !missing.includes("GOOGLE_SHEET_ID") },
-      { headers: noStoreHeaders },
-    );
-  }
 
   try {
-    const graph = await loadKnowledgeGraph(url.searchParams.get("refresh") === "1");
-    return NextResponse.json({ configured: true, graph }, { headers: noStoreHeaders });
+    const mode = getDataSourceMode();
+    const outcome = await loadForRoute(
+      mode,
+      getKnowledgeRepository(),
+      getSupabaseKnowledgeRepository(),
+      url.searchParams.get("refresh") === "1",
+    );
+
+    if (outcome.kind === "NOT_CONFIGURED") {
+      return NextResponse.json(
+        { configured: false, missing: outcome.missing, spreadsheetIdConfigured: !outcome.missing.includes("GOOGLE_SHEET_ID") },
+        { headers: noStoreHeaders },
+      );
+    }
+    if (outcome.kind === "SCHEMA_NOT_READY") {
+      return NextResponse.json({ configured: false, error: outcome.message, code: "SCHEMA_CONTRACT_NOT_READY" }, { status: 503, headers: noStoreHeaders });
+    }
+    return NextResponse.json(
+      { configured: true, graph: outcome.data, ...(outcome.dataSourceDiagnostic ? { dataSourceDiagnostic: outcome.dataSourceDiagnostic } : {}) },
+      { headers: noStoreHeaders },
+    );
   } catch (error) {
     return NextResponse.json(
       { configured: true, error: error instanceof Error ? error.message : "Knowledge Base sync failed" },
