@@ -44,13 +44,24 @@ import {
   applyDestinationDecision,
   buildFormatPreviewPlan,
   buildPreviewPlan,
+  buildChannelPublishPlan,
+  buildRepublishFixPlan,
   buildShootProductionPlan,
   confirmAtomicIdeaDrafts,
   type PreviewPlan,
 } from "./content-workflow";
 import { validateMaterialCta, isVideoFormat } from "./material-production";
+import {
+  DISTRIBUTION_PLAN_TASK_TYPE_NAME,
+  PUBLISH_SCHEDULE_TASK_TYPE_NAME,
+  REPUBLISH_FIX_TASK_TYPE_NAME,
+  getPublishBlockers,
+  publishInfoOf,
+  validatePublishCheck,
+  validatePublishTask,
+} from "./distribution";
 
-export type TaskUiBlockKey = "DESTINATION_DECISION" | "REPURPOSE_MAP" | "MATERIAL_CTA";
+export type TaskUiBlockKey = "DESTINATION_DECISION" | "REPURPOSE_MAP" | "MATERIAL_CTA" | "PUBLISH_CONTEXT";
 
 export interface TaskRuntimeContext {
   readonly instance: TaskInstance;
@@ -76,6 +87,11 @@ export interface TaskRuntimeHandler {
   readonly hiddenFieldIds?: readonly string[];
   readonly validateCompletion?: (context: TaskRuntimeContext) => CompletionValidationError[];
   readonly complete?: (context: TaskRuntimeContext, now: () => string) => TaskRuntimeCompletionResult;
+  /** Entity mutations to apply when the task is SUBMITTED for review
+   * (not on approval). Used so a Material can become distribution-ready
+   * while its final asset review is still open -- Distribution planning
+   * is allowed before final approval; only Publish is not. */
+  readonly onSubmitForReview?: (context: TaskRuntimeContext) => ContentEntityAction[];
 }
 
 const NO_EFFECT: Omit<TaskRuntimeCompletionResult, "completeNow"> = { entityActions: [], taskDrafts: [], plan: null };
@@ -210,12 +226,12 @@ const authoringHandler: TaskRuntimeHandler = {
 // --- Planning (section 9) ---
 
 const planningHandler: TaskRuntimeHandler = {
-  complete: (context) => {
-    const material = materialOf(context);
-    // "Ready for Shoot" is Material production state, not a task status
-    // and not a Shoot Session -- creating the session stays manual.
-    const entityActions: ContentEntityAction[] = material ? [{ type: "SET_MATERIAL_PRODUCTION", id: material.id, readyForShoot: true }] : [];
-    return { entityActions, taskDrafts: [], plan: null, completeNow: true };
+  complete: () => {
+    // Nothing to write: Ready-for-Shoot is derived from this Planning
+    // task's own state (material-production.ts), so there is no second
+    // copy that could go stale if Planning is reopened. Creating the
+    // Shoot Session stays manual.
+    return { ...NO_EFFECT, completeNow: true };
   },
 };
 
@@ -231,10 +247,65 @@ const shootHandler: TaskRuntimeHandler = {
 // --- Edit (section 15-16): completion unlocks Distribution eligibility ---
 
 const editHandler: TaskRuntimeHandler = {
+  onSubmitForReview: (context) => {
+    const material = materialOf(context);
+    return material ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "READY" }] : [];
+  },
   complete: (context) => {
     const material = materialOf(context);
     const entityActions: ContentEntityAction[] = material ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "READY" }] : [];
     return { entityActions, taskDrafts: [], plan: null, completeNow: true };
+  },
+};
+
+// --- Distribution (Sprint 6) ---
+
+const distributionPlanHandler: TaskRuntimeHandler = {
+  complete: (context) => {
+    const plan = buildChannelPublishPlan(context.instance, context.content, context.taskTypesById, PUBLISH_SCHEDULE_TASK_TYPE_NAME);
+    return { ...NO_EFFECT, plan, completeNow: !plan };
+  },
+};
+
+function publishBlockers(context: TaskRuntimeContext): string[] {
+  const material = materialOf(context);
+  if (!material) return [];
+  return getPublishBlockers({ material, channel: publishInfoOf(context.instance).channel, content: context.content, instances: context.allInstances, taskTypesById: context.taskTypesById });
+}
+
+const publishScheduleHandler: TaskRuntimeHandler = {
+  uiBlock: "PUBLISH_CONTEXT",
+  hiddenFieldIds: ["channel"],
+  validateCompletion: (context) => [
+    ...validatePublishTask(context.instance),
+    ...publishBlockers(context).map((message): CompletionValidationError => ({ code: "INVALID_FIELD_VALUE", message })),
+  ],
+  complete: (context) => {
+    const material = materialOf(context);
+    const info = publishInfoOf(context.instance);
+    // Recommended V1 rule: the FIRST channel confirmed published moves the
+    // Material to PUBLISHED. An immediate publish is that confirmation;
+    // a scheduled one is NOT (scheduled != published) -- its Publish Check
+    // is.
+    const entityActions: ContentEntityAction[] = material && info.mode === "PUBLISH_NOW" ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "PUBLISHED" }] : [];
+    return { entityActions, taskDrafts: [], plan: null, completeNow: true };
+  },
+};
+
+const publishCheckHandler: TaskRuntimeHandler = {
+  uiBlock: "PUBLISH_CONTEXT",
+  hiddenFieldIds: ["channel"],
+  validateCompletion: (context) => validatePublishCheck(context.instance),
+  complete: (context) => {
+    const material = materialOf(context);
+    if (context.instance.fieldValues["outcome"] === "PUBLISHED_SUCCESSFULLY") {
+      const entityActions: ContentEntityAction[] = material ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "PUBLISHED" }] : [];
+      return { entityActions, taskDrafts: [], plan: null, completeNow: true };
+    }
+    // DID_NOT_PUBLISH / PUBLISHED_WITH_ISSUE: OFFER Fix / Republish through
+    // the normal Preview -> Confirm; nothing is created unless confirmed.
+    const plan = buildRepublishFixPlan(context.instance, context.content, context.taskTypesById, REPUBLISH_FIX_TASK_TYPE_NAME);
+    return { ...NO_EFFECT, plan, completeNow: !plan };
   },
 };
 
@@ -250,6 +321,9 @@ export const TASK_RUNTIME_HANDLERS: Readonly<Record<string, TaskRuntimeHandler>>
   Planning: planningHandler,
   Shoot: shootHandler,
   Edit: editHandler,
+  [DISTRIBUTION_PLAN_TASK_TYPE_NAME]: distributionPlanHandler,
+  [PUBLISH_SCHEDULE_TASK_TYPE_NAME]: publishScheduleHandler,
+  "Publish Check": publishCheckHandler,
 };
 
 const GENERIC_HANDLER: TaskRuntimeHandler = {};

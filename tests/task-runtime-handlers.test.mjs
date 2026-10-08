@@ -9,7 +9,7 @@ import ts from "typescript";
 const LIBS = [
   "content-entity", "task-type", "task-type-fixtures", "workflow-template", "workflow-template-fixtures",
   "task-instance", "content-entity-fixtures", "content-entity-store", "workflow-runtime", "content-workflow",
-  "material-production", "task-runtime-handlers",
+  "material-production", "distribution", "task-runtime-handlers", "task-completion",
 ];
 const dir = mkdtempSync(join(tmpdir(), "ibox-runtime-handlers-"));
 for (const name of LIBS) {
@@ -199,10 +199,10 @@ test("CAROUSEL and TEXT_POST authoring completion marks the Material READY with 
 test("Planning completion makes the Material shoot-eligible but never creates a Shoot automatically", () => {
   const { world, taskFor, materialFor } = qoldiqWorldAfterRepurpose();
   const { created } = completeTask(world, taskFor("Reel B"), { fieldValues: REEL_AUTHORING(null) });
-  assert.deepEqual(mp.getReadyForShootMaterials(world.content), [], "not shoot-eligible before Planning completes");
+  assert.deepEqual(mp.getReadyForShootMaterials(world.content, world.instances, taskTypesById), [], "not shoot-eligible before Planning completes");
   const planned = completeTask(world, created[0], { fieldValues: { "desired-shoot-date": "2026-10-13" } });
   assert.deepEqual(planned.created, []);
-  assert.deepEqual(mp.getReadyForShootMaterials(world.content).map((m) => m.id), [materialFor("Reel B").id]);
+  assert.deepEqual(mp.getReadyForShootMaterials(world.content, world.instances, taskTypesById).map((m) => m.id), [materialFor("Reel B").id]);
   assert.equal(world.content.shootSessions.length, 0);
   assert.ok(!world.instances.some((i) => nameOf(i) === "Shoot"));
 });
@@ -218,12 +218,12 @@ test("Qoldiq demo: Reel A + Reel B -> Shoot Session -> Shoot -> N x (Edit + Cove
     const { created } = completeTask(world, taskFor(title), { fieldValues: REEL_AUTHORING(destinationId) });
     completeTask(world, created[0], { fieldValues: { "desired-shoot-date": "2026-10-13", location: "Ombor" } });
   }
-  assert.deepEqual(mp.getReadyForShootMaterials(world.content).map((m) => m.title).sort(), ["Reel A — REEL", "Reel B — REEL"].sort());
+  assert.deepEqual(mp.getReadyForShootMaterials(world.content, world.instances, taskTypesById).map((m) => m.title).sort(), ["Reel A — REEL", "Reel B — REEL"].sort());
 
   // Employee manually creates the session.
   const reelA = materialFor("Reel A");
   const reelB = materialFor("Reel B");
-  const built = mp.buildShootSession({ title: "Tuesday Shoot — Reel A + Reel B", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelA.id, reelB.id] }, world.content, typeByName("Shoot"), fixedNow);
+  const built = mp.buildShootSession({ title: "Tuesday Shoot — Reel A + Reel B", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelA.id, reelB.id] }, world.content, world.instances, taskTypesById, typeByName("Shoot"), fixedNow);
   assert.equal(built.ok, true);
   apply(world, built.build.entityActions);
   const [shoot] = spawn(world, [built.build.shootTaskDraft]);
@@ -280,7 +280,7 @@ test("Shoot completion enforces the required tasks: an `included: false` selecti
   const { created } = completeTask(world, taskFor("Reel B"), { fieldValues: REEL_AUTHORING(null) });
   completeTask(world, created[0], { fieldValues: { "desired-shoot-date": "2026-10-13" } });
   const reelB = world.content.materials.find((m) => m.title.startsWith("Reel B"));
-  const built = mp.buildShootSession({ title: "S", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelB.id] }, world.content, typeByName("Shoot"), fixedNow);
+  const built = mp.buildShootSession({ title: "S", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelB.id] }, world.content, world.instances, taskTypesById, typeByName("Shoot"), fixedNow);
   apply(world, built.build.entityActions);
   const [shoot] = spawn(world, [built.build.shootTaskDraft]);
   const plan = handlers.runTaskCompletion(ctxFor(world, shoot), fixedNow).plan;
@@ -293,7 +293,7 @@ test("default assignees: Shoot and Edit go to the Operator role, Cover and Capti
   const { created } = completeTask(world, taskFor("Reel B"), { fieldValues: REEL_AUTHORING(null) });
   completeTask(world, created[0], { fieldValues: { "desired-shoot-date": "2026-10-13" } });
   const reelB = world.content.materials.find((m) => m.title.startsWith("Reel B"));
-  const built = mp.buildShootSession({ title: "S", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelB.id] }, world.content, typeByName("Shoot"), fixedNow);
+  const built = mp.buildShootSession({ title: "S", scheduledAt: "2026-10-13", assignee: null, materialIds: [reelB.id] }, world.content, world.instances, taskTypesById, typeByName("Shoot"), fixedNow);
   apply(world, built.build.entityActions);
   const [shoot] = spawn(world, [built.build.shootTaskDraft]);
   assert.equal(shoot.assignee, "Operator / Montajer");

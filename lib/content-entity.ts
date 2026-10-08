@@ -148,6 +148,14 @@ export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
 /** Section 3 (Sprint 5): the CTA belongs to the Material -- never a
  * separate Task, never a library. Selected AFTER Material creation, as
  * the last required part of the authoring task. */
+/** Sprint 6 vocabulary used by Task Type fixtures and lib/distribution.ts.
+ * The repo has no canonical publishing-channel model (the CO-S6 tracking
+ * preview's `platform` strings are synthetic demo data), so this is the one
+ * minimal list -- configuration, not a channel library. */
+export const CHANNELS = ["Instagram", "Telegram", "LinkedIn", "X", "YouTube"] as const;
+export const PUBLISH_MODES = ["PUBLISH_NOW", "SCHEDULE"] as const;
+export const PUBLISH_CHECK_OUTCOMES = ["PUBLISHED_SUCCESSFULLY", "DID_NOT_PUBLISH", "PUBLISHED_WITH_ISSUE"] as const;
+
 export const CTA_TYPES = ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "WATCH_YOUTUBE", "NEXT_CONTENT", "RESOURCE", "COMMERCIAL", "CUSTOM"] as const;
 export type CtaType = (typeof CTA_TYPES)[number];
 
@@ -172,9 +180,9 @@ export interface Material {
   /** Sprint 5: null until the authoring task completes. */
   readonly ctaType: CtaType | null;
   readonly ctaText: string | null;
-  /** Sprint 5 (section 9): set when Planning completes. Not a task status
-   * and not a Material status -- just "eligible for a Shoot Session". */
-  readonly readyForShoot: boolean;
+  // Sprint 6: Ready-for-Shoot is DERIVED from the Material's Planning
+  // TaskInstance (see material-production.ts) -- there is deliberately no
+  // stored boolean here that could go stale if Planning is reopened.
   /** Sprint 5: set once the Material is manually put into a Shoot Session. */
   readonly shootSessionId: string | null;
   readonly status: MaterialStatus;
@@ -208,7 +216,6 @@ export function createMaterial(
     destinationId: input.destinationId ?? null,
     ctaType: null,
     ctaText: null,
-    readyForShoot: false,
     shootSessionId: null,
     status: "PLANNED",
     sourceTaskId: input.sourceTaskId ?? null,
@@ -236,12 +243,11 @@ export function setMaterialCta(
 
 export function setMaterialProduction(
   material: Material,
-  changes: { readyForShoot?: boolean; shootSessionId?: string | null },
+  changes: { shootSessionId?: string | null },
   now: () => string = () => new Date().toISOString(),
 ): Material {
   return {
     ...material,
-    readyForShoot: changes.readyForShoot ?? material.readyForShoot,
     shootSessionId: changes.shootSessionId === undefined ? material.shootSessionId : changes.shootSessionId,
     updatedAt: now(),
   };

@@ -96,7 +96,7 @@ export type ContentEntityAction =
   | { readonly type: "ADD_REPURPOSE_MAP"; readonly repurposeMap: RepurposeMap }
   | { readonly type: "ADD_ATOMIC_IDEAS"; readonly ideas: readonly AtomicIdea[] }
   | { readonly type: "SET_MATERIAL_CTA"; readonly id: string; readonly ctaType: CtaType; readonly ctaText: string; readonly destinationId: string | null }
-  | { readonly type: "SET_MATERIAL_PRODUCTION"; readonly id: string; readonly readyForShoot?: boolean; readonly shootSessionId?: string | null }
+  | { readonly type: "SET_MATERIAL_PRODUCTION"; readonly id: string; readonly shootSessionId?: string | null }
   | { readonly type: "ADD_SHOOT_SESSION"; readonly session: ShootSession }
   | { readonly type: "SET_SHOOT_SESSION_STATUS"; readonly id: string; readonly status: ShootSessionStatus };
 
@@ -165,7 +165,7 @@ export function contentEntityReducer(state: ContentEntityState, action: ContentE
     case "SET_MATERIAL_PRODUCTION": {
       const current = state.materials.find((material) => material.id === action.id);
       if (!current) return state;
-      const next = setMaterialProduction(current, { readyForShoot: action.readyForShoot, shootSessionId: action.shootSessionId }, now);
+      const next = setMaterialProduction(current, { shootSessionId: action.shootSessionId }, now);
       return { ...state, materials: state.materials.map((material) => (material.id === action.id ? next : material)) };
     }
     case "ADD_SHOOT_SESSION":

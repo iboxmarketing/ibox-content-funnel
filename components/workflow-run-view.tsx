@@ -21,7 +21,8 @@ import { TaskDetail } from "@/components/task-detail";
 import { GeneratedTaskPreview } from "@/components/generated-task-preview";
 import { buildTaskInstanceSeed, getStartableSteps } from "@/lib/workflow-runtime";
 import { confirmPreviewPlan, outcomeToEntityActions, type CandidateSelectionState, type PreviewPlan } from "@/lib/content-workflow";
-import { runTaskCompletion } from "@/lib/task-runtime-handlers";
+import { decideTaskReview, requestTaskCompletion, type CompletionDecision, type ReviewDecision } from "@/lib/task-completion";
+import type { TaskRuntimeContext } from "@/lib/task-runtime-handlers";
 import { ref } from "@/lib/content-entity";
 import type { TaskInstance } from "@/lib/task-instance";
 
@@ -32,7 +33,7 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
 
 export function WorkflowRunView() {
   const { state: contentOsState } = useContentOsStore();
-  const { state: runtimeState, createInstances, complete } = useTaskRuntimeStore();
+  const { state: runtimeState, createInstances, complete, submitForReview, approveReview, requestRevision } = useTaskRuntimeStore();
   const contentEntityStore = useContentEntityStore();
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(contentOsState.workflowTemplates[0]?.id ?? null);
   const [openInstanceId, setOpenInstanceId] = useState<string | null>(null);
@@ -67,36 +68,67 @@ export function WorkflowRunView() {
     setOpenInstanceId(created[0]?.id ?? null);
   }
 
-  /** Completing a task is delegated entirely to the central runtime
-   * handler registry (lib/task-runtime-handlers.ts): this view never
-   * inspects a Task Type name. The handler returns the content-entity
-   * mutations, the new TaskInstance drafts, an optional Generated Preview,
-   * and whether the task is DONE immediately or only once that preview is
-   * confirmed. */
-  function handleRequestComplete(instance: TaskInstance) {
+  function contextFor(instance: TaskInstance): TaskRuntimeContext | null {
     const taskType = taskTypesById.get(instance.taskTypeId);
-    if (!taskType) {
+    if (!taskType) return null;
+    return {
+      instance,
+      taskType,
+      template: instance.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null,
+      allInstances: runtimeState.instances,
+      taskTypesById,
+      content: contentEntityStore.state,
+    };
+  }
+
+  /** Applies a CompletionDecision from the single completion entry point
+   * (lib/task-completion.ts). This view never inspects a Task Type name or
+   * decides business completion semantics: it only carries the decision
+   * out -- status transition, entity mutations, new tasks, preview. */
+  function applyCompletionDecision(instance: TaskInstance, decision: CompletionDecision) {
+    switch (decision.kind) {
+      case "BLOCKED":
+        return; // Task Detail already shows the blocking reasons
+      case "SUBMITTED_FOR_REVIEW":
+        contentEntityStore.applyActions(decision.entityActions);
+        submitForReview(instance.id);
+        return;
+      case "REVISION_REQUESTED":
+        return; // handled with its note in handleReviewDecision
+      case "COMPLETED": {
+        const { result } = decision;
+        contentEntityStore.applyActions(result.entityActions);
+        const created = result.taskDrafts.length ? createInstances(result.taskDrafts) : [];
+        if (result.completeNow) complete(instance.id);
+        if (result.plan) {
+          setPendingPlan(result.plan);
+          return;
+        }
+        setOpenInstanceId(created[0]?.id ?? null);
+      }
+    }
+  }
+
+  function handleRequestComplete(instance: TaskInstance) {
+    const context = contextFor(instance);
+    if (!context) {
       complete(instance.id);
       setOpenInstanceId(null);
       return;
     }
-    const instanceTemplate = instance.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null;
-    const result = runTaskCompletion({
-      instance,
-      taskType,
-      template: instanceTemplate,
-      allInstances: runtimeState.instances,
-      taskTypesById,
-      content: contentEntityStore.state,
-    });
-    contentEntityStore.applyActions(result.entityActions);
-    const created = result.taskDrafts.length ? createInstances(result.taskDrafts) : [];
-    if (result.completeNow) complete(instance.id);
-    if (result.plan) {
-      setPendingPlan(result.plan);
+    applyCompletionDecision(instance, requestTaskCompletion(context));
+  }
+
+  function handleReviewDecision(instance: TaskInstance, reviewDecision: ReviewDecision, note: string) {
+    const context = contextFor(instance);
+    if (!context) return;
+    const decision = decideTaskReview(context, reviewDecision);
+    if (decision.kind === "REVISION_REQUESTED") {
+      requestRevision(instance.id, note);
       return;
     }
-    setOpenInstanceId(created[0]?.id ?? null);
+    if (decision.kind === "COMPLETED") approveReview(instance.id, note);
+    applyCompletionDecision(instance, decision);
   }
 
   function handlePreviewConfirm(selections: readonly CandidateSelectionState[]) {
@@ -112,7 +144,7 @@ export function WorkflowRunView() {
   if (openInstanceId) {
     return (
       <>
-        <TaskDetail instanceId={openInstanceId} onClose={() => setOpenInstanceId(null)} onComplete={handleRequestComplete} onOpenInstance={setOpenInstanceId} />
+        <TaskDetail instanceId={openInstanceId} onClose={() => setOpenInstanceId(null)} onComplete={handleRequestComplete} onReviewDecision={handleReviewDecision} onOpenInstance={setOpenInstanceId} />
         {pendingPlan && <GeneratedTaskPreview plan={pendingPlan} onCancel={() => setPendingPlan(null)} onConfirm={handlePreviewConfirm} />}
       </>
     );

@@ -79,6 +79,12 @@ export interface TaskType {
   readonly defaultAssigneeRule: AssigneeRule;
   readonly recommendedDay: RecommendedDay | null;
   readonly reviewRequired: boolean;
+  /** Sprint 6: which review a `reviewRequired` task is. DRAFT/concept (the
+   * default) only gates its own completion; FINAL is a final-asset review
+   * -- while unresolved it blocks Publish for the Material it points at, but
+   * never blocks creating a Distribution Plan. Pure configuration: nothing
+   * hardcodes which formats need a final review. */
+  readonly reviewStage?: "DRAFT" | "FINAL";
   readonly allowedLinkLabels: readonly string[];
   readonly completionRequirements: readonly CompletionRequirement[];
   readonly version: number;

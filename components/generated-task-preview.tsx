@@ -45,6 +45,8 @@ interface RowState {
   readonly category: string;
   readonly usage: string;
   readonly priority: string;
+  readonly publishMode: string;
+  readonly note: string;
 }
 
 function defaultTitleFor(candidate: PreviewCandidate): string {
@@ -52,22 +54,23 @@ function defaultTitleFor(candidate: PreviewCandidate): string {
   if (candidate.kind === "RESEARCH_TO_BLOGS") return `${candidate.node.name} — blog`;
   if (candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA") return `${candidate.atomicIdea.text} — ${candidate.format}`;
   if (candidate.kind === "PRODUCTION_TASK") return `${candidate.taskType.name} — ${candidate.material.title}`;
+  if (candidate.kind === "CHANNEL_PUBLISH" || candidate.kind === "REPUBLISH_FIX") return `${candidate.taskType.name} — ${candidate.channel} — ${candidate.material.title}`;
   return candidate.text;
 }
 
 function defaultAssigneeFor(candidate: PreviewCandidate): string {
-  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" ? candidate.taskType : undefined;
+  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" || candidate.kind === "CHANNEL_PUBLISH" || candidate.kind === "REPUBLISH_FIX" ? candidate.taskType : undefined;
   return taskType?.defaultAssigneeRule.kind === "FIXED_ROLE" ? taskType.defaultAssigneeRule.role : "";
 }
 
 /** Whether this one candidate creates a task directly (title/assignee/
  * deadline/transfer are meaningful) vs. only an entity (just a name). */
 function candidateCreatesTask(candidate: PreviewCandidate): boolean {
-  return candidate.kind === "RESEARCH_TO_BLOGS" || candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK";
+  return candidate.kind === "RESEARCH_TO_BLOGS" || candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" || candidate.kind === "CHANNEL_PUBLISH" || candidate.kind === "REPUBLISH_FIX";
 }
 
 function candidateTaskTypeFor(candidate: PreviewCandidate, planTargetTaskType: TaskType | null): TaskType | null {
-  if (candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK") return candidate.taskType;
+  if (candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" || candidate.kind === "CHANNEL_PUBLISH" || candidate.kind === "REPUBLISH_FIX") return candidate.taskType;
   return planTargetTaskType;
 }
 
@@ -138,7 +141,7 @@ function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, 
         {candidate.kind === "STEP_FANOUT" && <Badge variant="outline" className="text-[10px]">{candidate.step.blocking ? "blocking" : "non-blocking"}</Badge>}
         {candidate.kind === "RESEARCH_TO_BLOGS" && <Badge variant="outline" className="text-[10px]">UNPLANNED</Badge>}
         <strong className="text-sm text-slate-950">
-          {candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" ? candidate.taskType.name : null}
+          {candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" ? candidate.taskType.name : candidate.kind === "CHANNEL_PUBLISH" || candidate.kind === "REPUBLISH_FIX" ? candidate.channel : null}
         </strong>
       </div>
 
@@ -168,6 +171,17 @@ function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, 
             <label className="text-[11px] font-semibold text-slate-600">Assignee<Input value={row.assignee} onChange={(e) => onChange({ assignee: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} placeholder="Tanlanmagan" /></label>
             <label className="text-[11px] font-semibold text-slate-600">Deadline<Input type="date" value={row.deadline} onChange={(e) => onChange({ deadline: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
           </div>
+          {candidate.kind === "CHANNEL_PUBLISH" && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <label className="text-[11px] font-semibold text-slate-600">Publish mode
+                <select value={row.publishMode} onChange={(e) => onChange({ publishMode: e.target.value })} disabled={!row.included} className="mt-1 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs">
+                  <option value="SCHEDULE">SCHEDULE</option>
+                  <option value="PUBLISH_NOW">PUBLISH_NOW</option>
+                </select>
+              </label>
+              <label className="text-[11px] font-semibold text-slate-600 sm:col-span-2">Kanalga xos izoh / copy (ixtiyoriy)<Input value={row.note} onChange={(e) => onChange({ note: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+            </div>
+          )}
           {row.included && candidateTaskType && <TransferSection transferCandidates={transferCandidates} targetTaskType={candidateTaskType} selections={row.selections} onChange={(selections) => onChange({ selections })} />}
         </>
       )}
@@ -189,10 +203,12 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
       category: "",
       usage: "BOTH",
       priority: "LATER",
+      publishMode: "SCHEDULE",
+      note: "",
     })),
     // Always present, always submitted as included -- see
     // SHARED_TASK_SELECTION_KEY's doc comment in lib/content-workflow.ts.
-    { key: SHARED_TASK_SELECTION_KEY, included: true, title: "", assignee: "", deadline: "", selections: [], category: "", usage: "BOTH", priority: "LATER" },
+    { key: SHARED_TASK_SELECTION_KEY, included: true, title: "", assignee: "", deadline: "", selections: [], category: "", usage: "BOTH", priority: "LATER", publishMode: "SCHEDULE", note: "" },
   ]);
   const transferCandidates = useMemo(() => buildTransferCandidates(plan.sourceInstance, plan.sourceTaskType), [plan]);
 
@@ -207,6 +223,7 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
   function handleConfirm() {
     const selections: CandidateSelectionState[] = rows.map((row) => ({
       key: row.key, included: row.included, title: row.title, assignee: row.assignee, deadline: row.deadline, selections: row.selections,
+      publishMode: row.publishMode, note: row.note,
       category: row.category, usage: row.usage as CandidateSelectionState["usage"], priority: row.priority as CandidateSelectionState["priority"],
     }));
     onConfirm(selections);
@@ -217,10 +234,10 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
   // Visually separated groups: by format for Material previews (section
   // 15 of Sprint 4), by Material for post-Shoot production tasks (Sprint 5).
   const groups = useMemo(() => {
-    if (plan.mode !== "MATERIAL_FORMAT_GROUPS" && plan.mode !== "SHOOT_PRODUCTION") return null;
+    if (plan.mode !== "MATERIAL_FORMAT_GROUPS" && plan.mode !== "SHOOT_PRODUCTION" && plan.mode !== "CHANNEL_PUBLISH") return null;
     const grouped = new Map<string, PreviewCandidate[]>();
     for (const candidate of plan.candidates) {
-      const label = candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? FORMAT_GROUP_LABELS[candidate.format] ?? candidate.format : candidate.kind === "PRODUCTION_TASK" ? candidate.material.title : null;
+      const label = candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? FORMAT_GROUP_LABELS[candidate.format] ?? candidate.format : candidate.kind === "PRODUCTION_TASK" ? candidate.material.title : candidate.kind === "CHANNEL_PUBLISH" ? candidate.channel : null;
       if (!label) continue;
       const list = grouped.get(label) ?? [];
       list.push(candidate);
@@ -241,7 +258,7 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
 
         {groups ? (
           <div className="space-y-5">
-            {plan.mode === "SHOOT_PRODUCTION" && (
+            {(plan.mode === "SHOOT_PRODUCTION" || plan.mode === "CHANNEL_PUBLISH") && (
               <label className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-[11px] font-semibold text-slate-700">Common deadline (hammasi uchun)
                 <Input type="date" onChange={(e) => applyGroupDeadline(plan.candidates.map((c) => c.key), e.target.value)} className="h-7 w-36 bg-white text-xs" />
               </label>

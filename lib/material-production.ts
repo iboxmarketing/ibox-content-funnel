@@ -89,10 +89,25 @@ export function isVideoFormat(format: MaterialFormat): boolean {
 
 // --- Ready for Shoot (sections 9-10) ---
 
-/** Derived eligibility: Planning is done (`readyForShoot`) and the
- * Material has not yet been manually placed into a Shoot Session. */
-export function getReadyForShootMaterials(state: ContentEntityState): readonly Material[] {
-  return state.materials.filter((m) => m.readyForShoot && !m.shootSessionId);
+export const PLANNING_TASK_TYPE_NAME = "Planning";
+
+/**
+ * Derived eligibility (Sprint 6, replacing Sprint 5's stored boolean): a
+ * Material is Ready for Shoot while it has a Planning TaskInstance that is
+ * DONE and no Planning TaskInstance that is not (reopened/revised Planning
+ * removes eligibility at once), and it has not yet been manually placed
+ * into a Shoot Session. There is no second copy of this truth on the
+ * Material to go stale.
+ */
+export function isPlanningComplete(materialId: string, instances: readonly TaskInstance[], taskTypesById: ReadonlyMap<string, TaskType>): boolean {
+  const planning = instances.filter(
+    (i) => i.contentRef?.entityType === "MATERIAL" && i.contentRef.entityId === materialId && taskTypesById.get(i.taskTypeId)?.name === PLANNING_TASK_TYPE_NAME && i.status !== "CANCELLED",
+  );
+  return planning.length > 0 && planning.every((i) => i.status === "DONE");
+}
+
+export function getReadyForShootMaterials(state: ContentEntityState, instances: readonly TaskInstance[], taskTypesById: ReadonlyMap<string, TaskType>): readonly Material[] {
+  return state.materials.filter((m) => !m.shootSessionId && isPlanningComplete(m.id, instances, taskTypesById));
 }
 
 export interface ShootSessionInput {
@@ -120,12 +135,14 @@ export type ShootSessionBuildResult =
 export function buildShootSession(
   input: ShootSessionInput,
   state: ContentEntityState,
+  instances: readonly TaskInstance[],
+  taskTypesById: ReadonlyMap<string, TaskType>,
   shootTaskType: TaskType,
   now: () => string = () => new Date().toISOString(),
 ): ShootSessionBuildResult {
   if (!input.title.trim()) return { ok: false, message: "Shoot Session nomi kerak." };
   if (!input.materialIds.length) return { ok: false, message: "Kamida bitta Material tanlang." };
-  const eligibleIds = new Set(getReadyForShootMaterials(state).map((m) => m.id));
+  const eligibleIds = new Set(getReadyForShootMaterials(state, instances, taskTypesById).map((m) => m.id));
   const ineligible = input.materialIds.filter((id) => !eligibleIds.has(id));
   if (ineligible.length) return { ok: false, message: "Faqat Ready-for-Shoot ro'yxatidagi Material'lar tanlanishi mumkin." };
 

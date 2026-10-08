@@ -17,6 +17,8 @@ import { anglesForKnowledgeNode, destinationsForProblemCategory, problemCategory
 import { ATOMIC_IDEA_COVERAGE_TYPES, ATOMIC_IDEA_DECISIONS, DESTINATION_TYPES, MATERIAL_FORMATS, type Destination, type MaterialFormat } from "@/lib/content-entity";
 import { emptyAtomicIdeaDraft, validateAtomicIdeaCoverage, type AtomicIdeaDraft, type TaskInstance } from "@/lib/task-instance";
 import { isExactDestinationRequired } from "@/lib/material-production";
+import { getPublishBlockers, publishInfoOf } from "@/lib/distribution";
+import { useContentOsStore } from "@/components/content-os-store-provider";
 import { CTA_TYPES, type CtaType } from "@/lib/content-entity";
 import type { TaskUiBlockKey } from "@/lib/task-runtime-handlers";
 
@@ -206,8 +208,42 @@ function MaterialCtaBlock({ instance }: { instance: TaskInstance }) {
   );
 }
 
+/** Sprint 6 sections 8-9, 19: the context a Publish/Schedule (and Publish
+ * Check) task shows -- Material, Channel, CTA (Material's CTA is the
+ * default; the channel-specific override lives in an ordinary field),
+ * exact Destination + its status, and any blocking reasons. Read-only:
+ * the blockers themselves are enforced by the task's runtime handler. */
+function PublishContextBlock({ instance }: { instance: TaskInstance }) {
+  const { state } = useContentEntityStore();
+  const { state: runtimeState } = useTaskRuntimeStore();
+  const { state: contentOsState } = useContentOsStore();
+  const material = instance.contentRef?.entityType === "MATERIAL" ? state.materials.find((m) => m.id === instance.contentRef?.entityId) ?? null : null;
+  if (!material) return null;
+  const info = publishInfoOf(instance);
+  const destination = material.destinationId ? state.destinations.find((d) => d.id === material.destinationId) ?? null : null;
+  const blockers = instance.status === "DONE" ? [] : getPublishBlockers({ material, channel: info.channel, content: state, instances: runtimeState.instances, taskTypesById: new Map(contentOsState.taskTypes.map((t) => [t.id, t])) });
+  const channelCta = typeof instance.fieldValues["channel-cta-text"] === "string" ? instance.fieldValues["channel-cta-text"] : "";
+
+  return (
+    <div className="space-y-1.5 rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600">
+      <p className="text-xs font-bold uppercase tracking-[.06em] text-slate-500">Publish konteksti</p>
+      <p><strong className="text-slate-900">Material:</strong> {material.title} ({material.format})</p>
+      <p><strong className="text-slate-900">Kanal:</strong> {info.channel || "—"} · <strong className="text-slate-900">Mode:</strong> {info.mode ?? "—"}</p>
+      <p><strong className="text-slate-900">CTA:</strong> {channelCta || material.ctaText || "—"} {material.ctaType ? `(${material.ctaType})` : ""}{channelCta ? " · kanalga xos" : ""}</p>
+      <p><strong className="text-slate-900">Destination:</strong> {destination ? `${destination.name} — ${destination.status}` : "yo’q"}</p>
+      {blockers.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-700">
+          <p className="flex items-center gap-1.5 font-bold"><AlertTriangle className="size-3.5" /> Publish bloklangan</p>
+          <ul className="mt-1 space-y-0.5">{blockers.map((reason, index) => <li key={index}>• {reason}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const TASK_UI_BLOCKS: Readonly<Record<TaskUiBlockKey, ComponentType<{ instance: TaskInstance }>>> = {
   DESTINATION_DECISION: DestinationDecisionBlock,
   REPURPOSE_MAP: RepurposeMapBlock,
   MATERIAL_CTA: MaterialCtaBlock,
+  PUBLISH_CONTEXT: PublishContextBlock,
 };

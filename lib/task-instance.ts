@@ -72,6 +72,15 @@ export interface AtomicIdeaDraft {
   readonly destinationNeeded: boolean;
 }
 
+/** Minimal local transition history for reviewRequired tasks. The SAME
+ * TaskInstance moves ASSIGNED/... -> REVIEW -> REVISION -> REVIEW -> DONE;
+ * no revision TaskInstance is ever created, and no new status exists. */
+export interface ReviewEvent {
+  readonly kind: "SUBMITTED" | "APPROVED" | "REVISION_REQUESTED";
+  readonly at: string;
+  readonly note: string;
+}
+
 export interface TaskInstance {
   readonly id: string;
   readonly taskTypeId: string;
@@ -101,6 +110,7 @@ export interface TaskInstance {
   /** Only ever populated on a "Repurpose Map" task; empty for every
    * other Task Type. See AtomicIdeaDraft's doc comment. */
   readonly atomicIdeaDrafts: readonly AtomicIdeaDraft[];
+  readonly reviewEvents: readonly ReviewEvent[];
   readonly skipReason: string | null;
   /** null while still open; set exactly once, when the instance leaves
    * ASSIGNED/IN_PROGRESS/BLOCKED/REVIEW/REVISION via Complete or Skip. */
@@ -116,12 +126,13 @@ export interface TaskInstance {
  * null/empty for any task not yet wired to the content entity model. */
 export type TaskInstanceDraft = Omit<
   TaskInstance,
-  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt" | "contentRef" | "relatedEntityRefs" | "atomicIdeaDrafts"
+  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt" | "contentRef" | "relatedEntityRefs" | "atomicIdeaDrafts" | "reviewEvents"
 > & {
   readonly fieldProvenance?: readonly FieldProvenance[];
   readonly contentRef?: ContentEntityRef | null;
   readonly relatedEntityRefs?: readonly ContentEntityRef[];
   readonly atomicIdeaDrafts?: readonly AtomicIdeaDraft[];
+  readonly reviewEvents?: readonly ReviewEvent[];
 };
 
 function stableInstanceId(now: () => string): string {
@@ -136,6 +147,7 @@ export function createTaskInstance(draft: TaskInstanceDraft, now: () => string =
     contentRef: draft.contentRef ?? null,
     relatedEntityRefs: draft.relatedEntityRefs ?? [],
     atomicIdeaDrafts: draft.atomicIdeaDrafts ?? [],
+    reviewEvents: draft.reviewEvents ?? [],
     id: stableInstanceId(now),
     status: "ASSIGNED",
     outcome: null,
@@ -211,6 +223,26 @@ export function editTransferredFieldValue(instance: TaskInstance, fieldId: strin
 
 export function provenanceForField(instance: TaskInstance, fieldId: string): FieldProvenance | undefined {
   return instance.fieldProvenance.find((entry) => entry.fieldId === fieldId);
+}
+
+/** Employee submits (or resubmits after REVISION) for review. */
+export function submitTaskForReview(instance: TaskInstance, now: () => string = () => new Date().toISOString()): TaskInstance {
+  const at = now();
+  return { ...instance, status: "REVIEW", reviewEvents: [...instance.reviewEvents, { kind: "SUBMITTED", at, note: "" }], updatedAt: at };
+}
+
+/** Reviewer approves. Status stays REVIEW until the approved completion
+ * outcome actually runs (it may still be waiting on a Generated Preview). */
+export function recordReviewApproval(instance: TaskInstance, note: string, now: () => string = () => new Date().toISOString()): TaskInstance {
+  const at = now();
+  return { ...instance, reviewEvents: [...instance.reviewEvents, { kind: "APPROVED", at, note }], updatedAt: at };
+}
+
+/** Reviewer asks for changes: the SAME task goes REVIEW -> REVISION. */
+export function requestTaskRevision(instance: TaskInstance, note: string, now: () => string = () => new Date().toISOString()): TaskInstance {
+  if (instance.status !== "REVIEW") return instance;
+  const at = now();
+  return { ...instance, status: "REVISION", reviewEvents: [...instance.reviewEvents, { kind: "REVISION_REQUESTED", at, note }], updatedAt: at };
 }
 
 export function markTaskInstanceDone(instance: TaskInstance, now: () => string = () => new Date().toISOString()): TaskInstance {

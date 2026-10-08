@@ -8,13 +8,22 @@
  * TaskClient, no Supabase, no automatic batching.
  */
 import { useMemo, useState } from "react";
-import { CalendarClock, Clapperboard, PackageCheck, ShieldCheck } from "lucide-react";
+import { BookOpenCheck, CalendarClock, Clapperboard, Hourglass, PackageCheck, RefreshCw, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useContentOsStore } from "@/components/content-os-store-provider";
 import { useContentEntityStore } from "@/components/content-entity-store-provider";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
+import {
+  DISTRIBUTION_PLAN_TASK_TYPE_NAME,
+  buildDistributionPlanTask,
+  getAwaitingPublishCheck,
+  getDistributionPlanEligibleMaterials,
+  getLearningDue,
+  latestLearningSummary,
+  reconcileDueRuntimeTasks,
+} from "@/lib/distribution";
 import { SHOOT_TASK_TYPE_NAME, buildShootSession, getReadyForDistribution, getReadyForShootMaterials } from "@/lib/material-production";
 
 export function MaterialProductionView() {
@@ -28,11 +37,36 @@ export function MaterialProductionView() {
   const [scheduledAt, setScheduledAt] = useState("");
   const [assignee, setAssignee] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  // Local "now" for deterministic reconciliation (no timers): the
+  // employee can advance it past a scheduled publish / result review date.
+  const [localNow, setLocalNow] = useState(() => new Date().toISOString().slice(0, 16));
 
   const taskTypesById = useMemo(() => new Map(contentOsState.taskTypes.map((t) => [t.id, t])), [contentOsState.taskTypes]);
   const shootTaskType = contentOsState.taskTypes.find((t) => t.name === SHOOT_TASK_TYPE_NAME) ?? null;
-  const readyForShoot = getReadyForShootMaterials(state);
+  const readyForShoot = getReadyForShootMaterials(state, runtimeState.instances, taskTypesById);
   const readyForDistribution = useMemo(() => getReadyForDistribution(state, runtimeState.instances, taskTypesById), [state, runtimeState.instances, taskTypesById]);
+
+  const awaitingCheck = useMemo(() => getAwaitingPublishCheck(runtimeState.instances, taskTypesById), [runtimeState.instances, taskTypesById]);
+  const learningDue = useMemo(() => getLearningDue(runtimeState.instances, taskTypesById), [runtimeState.instances, taskTypesById]);
+  const planEligible = useMemo(() => new Set(getDistributionPlanEligibleMaterials(state, runtimeState.instances, taskTypesById).map((m) => m.id)), [state, runtimeState.instances, taskTypesById]);
+  const learningSummaries = useMemo(
+    () => state.materials.map((material) => ({ material, summary: latestLearningSummary(material.id, runtimeState.instances, taskTypesById) })).filter((row) => row.summary),
+    [state.materials, runtimeState.instances, taskTypesById],
+  );
+
+  function createDistributionPlan(materialId: string) {
+    const material = state.materials.find((m) => m.id === materialId);
+    const planType = contentOsState.taskTypes.find((t) => t.name === DISTRIBUTION_PLAN_TASK_TYPE_NAME);
+    if (!material || !planType) { setNotice("Distribution Plan Task Type topilmadi."); return; }
+    createInstances([buildDistributionPlanTask(material, planType)]);
+    setNotice(`“${material.title}” uchun Distribution Plan task yaratildi (Workflow Run → Material va boshqa tasklar).`);
+  }
+
+  function reconcile() {
+    const drafts = reconcileDueRuntimeTasks({ now: localNow, instances: runtimeState.instances, taskTypesById }, contentOsState.taskTypes);
+    if (drafts.length) createInstances(drafts);
+    setNotice(drafts.length ? `${drafts.length} ta muddati kelgan task yaratildi.` : "Muddati kelgan yangi task yo’q.");
+  }
 
   function toggle(id: string, checked: boolean) {
     setSelectedIds((current) => (checked ? [...current, id] : current.filter((x) => x !== id)));
@@ -40,7 +74,7 @@ export function MaterialProductionView() {
 
   function createSession() {
     if (!shootTaskType) { setNotice("Shoot Task Type topilmadi."); return; }
-    const result = buildShootSession({ title, scheduledAt: scheduledAt || null, assignee: assignee || null, materialIds: selectedIds }, state, shootTaskType);
+    const result = buildShootSession({ title, scheduledAt: scheduledAt || null, assignee: assignee || null, materialIds: selectedIds }, state, runtimeState.instances, taskTypesById, shootTaskType);
     if (!result.ok) { setNotice(result.message); return; }
     contentEntityStore.applyActions(result.build.entityActions);
     createInstances([result.build.shootTaskDraft]);
@@ -54,7 +88,7 @@ export function MaterialProductionView() {
         <h1 className="text-[17px] font-bold tracking-[-0.02em] text-slate-950">Production Queue</h1>
         <p className="text-[11px] text-slate-500">Ready for Shoot → Shoot Session → Ready for Distribution</p>
       </div>
-      <div className="flex shrink-0 items-center gap-2 border-b border-blue-100 bg-blue-50 px-4 py-2 text-[11px] font-medium text-blue-900 lg:px-5"><ShieldCheck className="size-3.5" /> Sessiya-only · Distribution Plan hali yaratilmaydi.</div>
+      <div className="flex shrink-0 items-center gap-2 border-b border-blue-100 bg-blue-50 px-4 py-2 text-[11px] font-medium text-blue-900 lg:px-5"><ShieldCheck className="size-3.5" /> Sessiya-only · hech narsa haqiqiy platformaga nashr qilinmaydi.<span className="ml-auto flex items-center gap-2">Local now<Input type="datetime-local" value={localNow} onChange={(e) => setLocalNow(e.target.value)} className="h-7 w-44 bg-white text-xs" /><Button type="button" size="sm" variant="outline" className="h-7 rounded-lg bg-white text-xs" onClick={reconcile}><RefreshCw className="size-3" /> Reconcile</Button></span></div>
       {notice && <div className="shrink-0 border-b border-emerald-100 bg-emerald-50 px-4 py-2 text-[11px] font-medium text-emerald-800 lg:px-5">{notice}</div>}
 
       <div className="min-h-0 flex-1 space-y-8 overflow-y-auto p-4 lg:p-6">
@@ -97,12 +131,42 @@ export function MaterialProductionView() {
               <div className="flex items-center gap-2"><strong className="flex-1 truncate text-sm text-slate-900">{material.title}</strong><Badge variant="outline" className="text-[10px]">{material.format}</Badge></div>
               <p className="mt-1 text-[11px] text-slate-600">CTA: {material.ctaType ?? "—"}{material.ctaText ? ` — ${material.ctaText}` : ""}</p>
               <p className="text-[11px] text-slate-600">Destination: {destination ? `${destination.name} (${destination.status})` : "—"}</p>
+              {planEligible.has(material.id) ? (
+                <Button type="button" size="sm" className="mt-2 h-7 rounded-lg bg-blue-700 text-xs hover:bg-blue-800" onClick={() => createDistributionPlan(material.id)}>Distribution Plan yaratish</Button>
+              ) : <p className="mt-2 text-[10px] text-slate-400">Distribution Plan mavjud.</p>}
               {productionTasks.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">{productionTasks.map((t, index) => <Badge key={index} variant="outline" className="text-[10px]">{t.taskType}: {t.status}</Badge>)}</div>
               )}
             </div>
           ))}
           {!readyForDistribution.length && <p className="text-xs text-slate-400">Hali Distribution’ga tayyor Material yo’q.</p>}
+        </section>
+
+        <section className="mx-auto max-w-3xl space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-950"><Hourglass className="size-4 text-amber-600" /> Scheduled / Awaiting Publish Check ({awaitingCheck.length})</h2>
+          {awaitingCheck.map(({ publishTask, info, check }) => (
+            <div key={publishTask.id} className="rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600">
+              <strong className="text-sm text-slate-900">{publishTask.title}</strong>
+              <p className="mt-1">{info.channel} · scheduled {info.scheduledPublishAt || "—"} · {check ? `Publish Check: ${check.status}` : "Publish Check hali due emas"}</p>
+            </div>
+          ))}
+          {!awaitingCheck.length && <p className="text-xs text-slate-400">Hozircha kutilayotgan Publish Check yo’q.</p>}
+        </section>
+
+        <section className="mx-auto max-w-3xl space-y-3">
+          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-950"><BookOpenCheck className="size-4 text-violet-600" /> Learning Due ({learningDue.length})</h2>
+          {learningDue.map((task) => (
+            <div key={task.id} className="rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600"><strong className="text-sm text-slate-900">{task.title}</strong><p className="mt-1">Deadline {task.deadline ?? "—"} · {task.status}</p></div>
+          ))}
+          {!learningDue.length && <p className="text-xs text-slate-400">Hozircha Learning task yo’q.</p>}
+          {learningSummaries.map(({ material, summary }) => summary && (
+            <div key={material.id} className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 text-[11px] text-slate-700">
+              <strong className="text-sm text-slate-900">{material.title}</strong>
+              <p className="mt-1"><b>Result:</b> {summary.result}</p>
+              <p><b>What worked?</b> {summary.whatWorked}</p>
+              <p><b>Next step:</b> {summary.nextStep}</p>
+            </div>
+          ))}
         </section>
       </div>
     </div>

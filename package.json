@@ -43,6 +43,8 @@
     "test:content-entity": "node --test tests/content-entity.test.mjs",
     "test:content-entity-store": "node --test tests/content-entity-store.test.mjs",
     "test:content-workflow": "node --test tests/content-workflow.test.mjs",
+    "test:task-completion": "node --test tests/task-completion.test.mjs",
+    "test:distribution": "node --test tests/distribution.test.mjs",
     "test:material-production": "node --test tests/material-production.test.mjs",
     "test:task-runtime-handlers": "node --test tests/task-runtime-handlers.test.mjs"
   },

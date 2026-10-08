@@ -188,23 +188,22 @@ test("entity ids are never shaped like task ids (no accidental id-space collisio
   assert.ok(!node.id.startsWith("ti-"));
 });
 
-test("Material starts with no CTA, not shoot-ready, and outside any Shoot Session", () => {
+test("Material starts with no CTA and outside any Shoot Session", () => {
   const material = createMaterial({ blogId: "b", title: "Reel", format: "REEL", primaryAtomicIdeaId: "i" }, fixedNow);
   assert.equal(material.ctaType, null);
   assert.equal(material.ctaText, null);
-  assert.equal(material.readyForShoot, false);
   assert.equal(material.shootSessionId, null);
 });
 
-test("setMaterialCta stores the CTA on the Material; setMaterialProduction touches only production flags", () => {
+test("setMaterialCta stores the CTA on the Material; setMaterialProduction touches only the Shoot Session link", () => {
   const material = createMaterial({ blogId: "b", title: "Reel", format: "REEL", primaryAtomicIdeaId: "i" }, fixedNow);
   const withCta = setMaterialCta(material, { ctaType: "RESOURCE", ctaText: "Oling", destinationId: "dest-1" }, fixedNow);
   assert.deepEqual([withCta.ctaType, withCta.ctaText, withCta.destinationId], ["RESOURCE", "Oling", "dest-1"]);
-  const ready = setMaterialProduction(withCta, { readyForShoot: true }, fixedNow);
-  assert.equal(ready.readyForShoot, true);
-  assert.equal(ready.shootSessionId, null);
-  assert.equal(ready.ctaText, "Oling");
-  assert.equal(setMaterialProduction(ready, { shootSessionId: "s-1" }, fixedNow).shootSessionId, "s-1");
+  assert.equal(withCta.shootSessionId, null);
+  assert.equal("readyForShoot" in withCta, false, "Ready-for-Shoot is derived, never stored on the Material");
+  const inSession = setMaterialProduction(withCta, { shootSessionId: "s-1" }, fixedNow);
+  assert.equal(inSession.shootSessionId, "s-1");
+  assert.equal(inSession.ctaText, "Oling");
 });
 
 test("CTA types and the minimal Material status vocabulary", () => {

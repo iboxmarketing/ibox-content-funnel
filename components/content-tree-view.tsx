@@ -24,6 +24,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Lightbulb, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useContentEntityStore } from "@/components/content-entity-store-provider";
+import { useContentOsStore } from "@/components/content-os-store-provider";
+import { latestLearningSummary } from "@/lib/distribution";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
 import {
   anglesForDestination,
@@ -62,7 +64,7 @@ function TreeRow({ depth, label, badge, selected, onSelect, children }: { depth:
  * NOT a global library -- `destinationsForProblemCategory` already
  * guarantees that scoping. */
 function DestinationLibrary({ problemCategoryId }: { problemCategoryId: string }) {
-  const { state } = useContentEntityStore();
+  const { state, setDestinationStatus } = useContentEntityStore();
   const [statusFilter, setStatusFilter] = useState<DestinationStatus | "ALL">("ALL");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -92,6 +94,11 @@ function DestinationLibrary({ problemCategoryId }: { problemCategoryId: string }
             </button>
             {expanded && (
               <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-600">
+                <label className="flex items-center gap-2"><strong className="text-slate-900">Status:</strong>
+                  <select value={destination.status} onChange={(e) => setDestinationStatus(destination.id, e.target.value as DestinationStatus)} className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px]">
+                    {DESTINATION_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+                  </select>
+                </label>
                 <p><strong className="text-slate-900">Value proposition:</strong> {destination.valueProposition || "—"}</p>
                 <p><strong className="text-slate-900">Owner:</strong> {destination.owner ?? "—"}</p>
                 <p><strong className="text-slate-900">Deadline:</strong> {destination.deadline ?? "—"}</p>
@@ -110,6 +117,8 @@ function DestinationLibrary({ problemCategoryId }: { problemCategoryId: string }
 export function ContentTreeView() {
   const { state } = useContentEntityStore();
   const { state: runtimeState } = useTaskRuntimeStore();
+  const { state: contentOsState } = useContentOsStore();
+  const taskTypesById = useMemo(() => new Map(contentOsState.taskTypes.map((t) => [t.id, t])), [contentOsState.taskTypes]);
   const [selected, setSelected] = useState<SelectedEntity>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
@@ -201,6 +210,17 @@ export function ContentTreeView() {
                 {"sourceTaskId" in detail && detail.sourceTaskId && <div><dt className="font-semibold text-slate-900">Manba task</dt><dd className="truncate font-mono">{detail.sourceTaskId}</dd></div>}
                 <div><dt className="font-semibold text-slate-900">Yaratilgan</dt><dd>{new Date(detail.createdAt).toLocaleString("uz")}</dd></div>
               </dl>
+              {selected?.type === "MATERIAL" && (() => {
+                const summary = latestLearningSummary(selected.id, runtimeState.instances, taskTypesById);
+                return summary ? (
+                  <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 text-[11px] text-slate-700">
+                    <p className="text-[10px] font-bold uppercase tracking-[.06em] text-violet-800">Latest Learning</p>
+                    <p className="mt-1"><b>Result:</b> {summary.result}</p>
+                    <p><b>What worked?</b> {summary.whatWorked}</p>
+                    <p><b>Next step:</b> {summary.nextStep}</p>
+                  </div>
+                ) : null;
+              })()}
               {selected?.type === "PROBLEM_CATEGORY" && <DestinationLibrary problemCategoryId={selected.id} />}
             </div>
           ) : (

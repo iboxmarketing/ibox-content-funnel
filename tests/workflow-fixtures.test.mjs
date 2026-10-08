@@ -25,10 +25,12 @@ const EXPECTED_TASK_TYPE_NAMES = [
   "Publish / Schedule", "Publish Check", "Learning",
   // V1 Sprint 4
   "YouTube", "YouTube Outline", "Checklist / PDF Creation", "External Tool Setup",
+  // V1 Sprint 6
+  "Republish / Fix Publish",
 ];
 
-test("all 26 approved Task Type fixtures exist, by name, exactly once each", () => {
-  assert.equal(TASK_TYPE_FIXTURES.length, 26);
+test("all 27 approved Task Type fixtures exist, by name, exactly once each", () => {
+  assert.equal(TASK_TYPE_FIXTURES.length, 27);
   const names = TASK_TYPE_FIXTURES.map((t) => t.name);
   assert.deepEqual(names.slice().sort(), EXPECTED_TASK_TYPE_NAMES.slice().sort());
   assert.equal(new Set(names).size, names.length, "no duplicate names");

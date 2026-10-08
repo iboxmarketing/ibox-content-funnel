@@ -76,6 +76,8 @@ export type PreviewMode =
   | "ANGLE_TO_ANGLES"
   | "MATERIAL_FORMAT_GROUPS"
   | "SHOOT_PRODUCTION"
+  | "CHANNEL_PUBLISH"
+  | "REPUBLISH_FIX"
   | "STEP_FANOUT";
 
 /** KNOWLEDGE_DISCOVERY_TO_NODES's per-candidate rows only carry an entity
@@ -142,7 +144,29 @@ export interface ProductionTaskPreviewCandidate {
   readonly required: true;
 }
 
+/** Sprint 6 (section 7): one selected channel of a Distribution Plan ->
+ * one Publish/Schedule task for (Material x Channel). */
+export interface ChannelPublishPreviewCandidate {
+  readonly kind: "CHANNEL_PUBLISH";
+  readonly key: string;
+  readonly channel: string;
+  readonly material: Material;
+  readonly taskType: TaskType;
+}
+
+/** Sprint 6 (section 18): an OFFERED Fix / Republish task after a failed
+ * or problematic Publish Check. Never created without Confirm. */
+export interface RepublishFixPreviewCandidate {
+  readonly kind: "REPUBLISH_FIX";
+  readonly key: string;
+  readonly channel: string;
+  readonly material: Material;
+  readonly taskType: TaskType;
+}
+
 export type PreviewCandidate =
+  | ChannelPublishPreviewCandidate
+  | RepublishFixPreviewCandidate
   | TextPreviewCandidate
   | ResearchPreviewCandidate
   | AnglePreviewCandidate
@@ -296,6 +320,9 @@ export interface CandidateSelectionState {
    * candidate (RESEARCH_TO_BLOGS, STEP_FANOUT, MATERIAL_FORMAT_GROUPS). */
   readonly selections: readonly TransferSelection[];
   /** Only meaningful for ANGLE_TO_ANGLES. */
+  /** Only meaningful for CHANNEL_PUBLISH. */
+  readonly publishMode?: string;
+  readonly note?: string;
   readonly category?: string;
   readonly usage?: AngleUsage;
   readonly priority?: AnglePriority;
@@ -353,6 +380,10 @@ export function confirmPreviewPlan(plan: PreviewPlan, selections: readonly Candi
       return confirmMaterialFormatGroups(plan, selectionByKey, now);
     case "SHOOT_PRODUCTION":
       return confirmShootProduction(plan, selections, now);
+    case "CHANNEL_PUBLISH":
+      return confirmChannelPublish(plan, selectionByKey);
+    case "REPUBLISH_FIX":
+      return confirmRepublishFix(plan, selectionByKey);
     case "STEP_FANOUT":
       return { ...EMPTY_OUTCOME, taskDrafts: confirmStepFanoutCandidates(plan, plan.candidates as readonly StepFanoutPreviewCandidate[], selectionByKey) };
     default:
@@ -566,6 +597,77 @@ function confirmShootProduction(plan: PreviewPlan, selections: readonly Candidat
   const sessionRef = plan.sourceInstance.contentRef;
   const entityActions: ContentEntityAction[] = sessionRef?.entityType === "SHOOT_SESSION" ? [{ type: "SET_SHOOT_SESSION_STATUS", id: sessionRef.entityId, status: "COMPLETED" }] : [];
   return { ...EMPTY_OUTCOME, taskDrafts, entityActions };
+}
+
+// --- Distribution Plan -> per-channel Publish/Schedule (Sprint 6) ---
+
+/** Pure. One candidate per channel selected in the Distribution Plan's
+ * `channels` field. Returns null when none is selected or the Publish
+ * Task Type is missing. */
+export function buildChannelPublishPlan(
+  planInstance: TaskInstance,
+  contentEntities: ContentEntityState,
+  taskTypesById: ReadonlyMap<string, TaskType>,
+  publishTaskTypeName: string,
+): PreviewPlan | null {
+  const materialRef = planInstance.contentRef;
+  if (!materialRef || materialRef.entityType !== "MATERIAL") return null;
+  const material = contentEntities.materials.find((m) => m.id === materialRef.entityId);
+  const sourceTaskType = taskTypesById.get(planInstance.taskTypeId);
+  const taskType = [...taskTypesById.values()].find((t) => t.name === publishTaskTypeName);
+  const channels = planInstance.fieldValues["channels"];
+  if (!material || !sourceTaskType || !taskType || !Array.isArray(channels) || !channels.length) return null;
+  const candidates: PreviewCandidate[] = channels.map((channel) => ({ kind: "CHANNEL_PUBLISH" as const, key: `${material.id}-${channel}`, channel, material, taskType }));
+  return { mode: "CHANNEL_PUBLISH", sourceInstance: planInstance, sourceTaskType, targetStep: null, targetTaskType: null, candidates };
+}
+
+function confirmChannelPublish(plan: PreviewPlan, selectionByKey: ReadonlyMap<string, CandidateSelectionState>): ConfirmOutcome {
+  const taskDrafts: TaskInstanceDraft[] = [];
+  for (const candidate of plan.candidates.filter((c): c is ChannelPublishPreviewCandidate => c.kind === "CHANNEL_PUBLISH")) {
+    const selection = selectionByKey.get(candidate.key); // excluded channel: no selection, no task
+    if (!selection) continue;
+    const defaultTitle = `${candidate.taskType.name} — ${candidate.channel} — ${candidate.material.title}`;
+    const seed = buildStandaloneTaskInstanceSeed(candidate.taskType, defaultTitle, plan.sourceInstance.id, ref("MATERIAL", candidate.material.id));
+    taskDrafts.push({
+      ...seed,
+      title: selection.title.trim() || defaultTitle,
+      assignee: selection.assignee.trim() || null,
+      deadline: selection.deadline || null,
+      fieldValues: { channel: candidate.channel, "publish-mode": selection.publishMode === "PUBLISH_NOW" ? "PUBLISH_NOW" : "SCHEDULE", ...(selection.note?.trim() ? { "channel-note": selection.note.trim() } : {}) },
+    });
+  }
+  return { ...EMPTY_OUTCOME, taskDrafts };
+}
+
+/** Pure. Offers one Fix / Republish task for a failed or problematic
+ * Publish Check. Returns null when the Task Type is missing. */
+export function buildRepublishFixPlan(
+  checkInstance: TaskInstance,
+  contentEntities: ContentEntityState,
+  taskTypesById: ReadonlyMap<string, TaskType>,
+  fixTaskTypeName: string,
+): PreviewPlan | null {
+  const materialRef = checkInstance.contentRef;
+  if (!materialRef || materialRef.entityType !== "MATERIAL") return null;
+  const material = contentEntities.materials.find((m) => m.id === materialRef.entityId);
+  const sourceTaskType = taskTypesById.get(checkInstance.taskTypeId);
+  const taskType = [...taskTypesById.values()].find((t) => t.name === fixTaskTypeName);
+  if (!material || !sourceTaskType || !taskType) return null;
+  const channel = typeof checkInstance.fieldValues["channel"] === "string" ? checkInstance.fieldValues["channel"] : "";
+  const candidates: PreviewCandidate[] = [{ kind: "REPUBLISH_FIX", key: `${checkInstance.id}-fix`, channel, material, taskType }];
+  return { mode: "REPUBLISH_FIX", sourceInstance: checkInstance, sourceTaskType, targetStep: null, targetTaskType: null, candidates };
+}
+
+function confirmRepublishFix(plan: PreviewPlan, selectionByKey: ReadonlyMap<string, CandidateSelectionState>): ConfirmOutcome {
+  const taskDrafts: TaskInstanceDraft[] = [];
+  for (const candidate of plan.candidates.filter((c): c is RepublishFixPreviewCandidate => c.kind === "REPUBLISH_FIX")) {
+    const selection = selectionByKey.get(candidate.key);
+    if (!selection) continue;
+    const defaultTitle = `${candidate.taskType.name} — ${candidate.channel} — ${candidate.material.title}`;
+    const seed = buildStandaloneTaskInstanceSeed(candidate.taskType, defaultTitle, plan.sourceInstance.id, ref("MATERIAL", candidate.material.id));
+    taskDrafts.push({ ...seed, title: selection.title.trim() || defaultTitle, assignee: selection.assignee.trim() || null, deadline: selection.deadline || null, fieldValues: { channel: candidate.channel } });
+  }
+  return { ...EMPTY_OUTCOME, taskDrafts };
 }
 
 // --- Destination Decision (sections 7-9): handled directly, not through

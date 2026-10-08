@@ -14,11 +14,14 @@ import {
   markTaskInstanceDone,
   removeAtomicIdeaDraft,
   removeCustomFieldFromInstance,
+  recordReviewApproval,
+  requestTaskRevision,
   setTaskInstanceAssignee,
   setTaskInstanceDeadline,
   setTaskInstanceFieldValue,
   setTaskInstanceStatus,
   skipTaskInstance,
+  submitTaskForReview,
   updateAtomicIdeaDraft,
   type AtomicIdeaDraft,
   type FieldValue,
@@ -45,6 +48,9 @@ export type TaskRuntimeAction =
    * navigate straight to the first newly-generated task after Confirm. */
   | { readonly type: "ADD_INSTANCES"; readonly instances: readonly TaskInstance[] }
   | { readonly type: "SET_STATUS"; readonly instanceId: string; readonly status: TaskInstanceStatus }
+  | { readonly type: "SUBMIT_FOR_REVIEW"; readonly instanceId: string }
+  | { readonly type: "APPROVE_REVIEW"; readonly instanceId: string; readonly note: string }
+  | { readonly type: "REQUEST_REVISION"; readonly instanceId: string; readonly note: string }
   | { readonly type: "SET_DEADLINE"; readonly instanceId: string; readonly deadline: string | null }
   | { readonly type: "SET_ASSIGNEE"; readonly instanceId: string; readonly assignee: string | null }
   | { readonly type: "SET_FIELD_VALUE"; readonly instanceId: string; readonly fieldId: string; readonly value: FieldValue }
@@ -74,6 +80,18 @@ export function taskRuntimeReducer(state: TaskRuntimeState, action: TaskRuntimeA
     case "SET_STATUS": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
       return withInstance(state, action.instanceId, (instance) => setTaskInstanceStatus(instance, action.status, now));
+    }
+    case "SUBMIT_FOR_REVIEW": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => submitTaskForReview(instance, now));
+    }
+    case "APPROVE_REVIEW": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => recordReviewApproval(instance, action.note, now));
+    }
+    case "REQUEST_REVISION": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => requestTaskRevision(instance, action.note, now));
     }
     case "SET_DEADLINE": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;

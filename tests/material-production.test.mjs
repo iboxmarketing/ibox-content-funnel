@@ -20,6 +20,11 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 let tick = 0;
 const fixedNow = () => `2026-10-10T00:00:${String(tick++).padStart(2, "0")}.000Z`;
 
+const PLANNING_TYPE = { id: "tt-planning", name: "Planning" };
+const TYPES = new Map([[PLANNING_TYPE.id, PLANNING_TYPE]]);
+const planning = (material, status = "DONE") => ({
+  id: `p-${material.id}-${status}`, taskTypeId: PLANNING_TYPE.id, contentRef: entity.ref("MATERIAL", material.id), status,
+});
 const SHOOT_TYPE = { id: "tt-shoot", name: "Shoot", defaultAssigneeRule: { kind: "FIXED_ROLE", role: "Operator / Montajer" } };
 
 function worldWithMaterials(specs) {
@@ -83,31 +88,37 @@ test("a Material resolves its ProblemCategory (and so its Destination Library) t
 
 // --- Ready for Shoot / Shoot Session ---
 
-test("a Material is Ready for Shoot only once Planning flagged it, and leaves the list when put in a session", () => {
-  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }, { title: "Reel B", format: "REEL", patch: { readyForShoot: true } }]);
-  assert.deepEqual(mp.getReadyForShootMaterials(state).map((m) => m.title), ["Reel B"]);
-  assert.equal(materials[0].readyForShoot, false);
+test("Ready for Shoot is DERIVED from the Planning task: only a DONE Planning makes a Material eligible", () => {
+  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }, { title: "Reel B", format: "REEL" }, { title: "Reel C", format: "REEL" }]);
+  const instances = [planning(materials[1], "DONE"), planning(materials[2], "IN_PROGRESS")];
+  assert.deepEqual(mp.getReadyForShootMaterials(state, instances, TYPES).map((m) => m.title), ["Reel B"]);
+  assert.equal("readyForShoot" in materials[0], false, "no stored boolean that could go stale");
+});
+
+test("reopening/revising Planning removes eligibility immediately (no stale second truth)", () => {
+  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }]);
+  const done = planning(materials[0], "DONE");
+  assert.equal(mp.getReadyForShootMaterials(state, [done], TYPES).length, 1);
+  for (const reopened of ["IN_PROGRESS", "REVISION", "REVIEW", "BLOCKED", "ASSIGNED"]) {
+    assert.equal(mp.getReadyForShootMaterials(state, [{ ...done, status: reopened }], TYPES).length, 0, `Planning ${reopened}`);
+  }
+  // A second, newer Planning that is not done also removes eligibility.
+  assert.equal(mp.getReadyForShootMaterials(state, [done, { ...done, id: "p2", status: "ASSIGNED" }], TYPES).length, 0);
 });
 
 test("Shoot Session creation is manual: only the chosen Ready-for-Shoot Materials join, others stay outside", () => {
-  const { state, materials } = worldWithMaterials([
-    { title: "Reel A", format: "REEL", patch: { readyForShoot: true } },
-    { title: "Reel B", format: "REEL", patch: { readyForShoot: true } },
-    { title: "Reel C", format: "REEL", patch: { readyForShoot: true } },
-  ]);
-  const result = mp.buildShootSession({ title: "Tuesday Shoot — 2 Reels", scheduledAt: "2026-10-13", assignee: null, materialIds: [materials[0].id, materials[1].id] }, state, SHOOT_TYPE, fixedNow);
+  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }, { title: "Reel B", format: "REEL" }, { title: "Reel C", format: "REEL" }]);
+  const instances = materials.map((m) => planning(m));
+  const result = mp.buildShootSession({ title: "Tuesday Shoot — 2 Reels", scheduledAt: "2026-10-13", assignee: null, materialIds: [materials[0].id, materials[1].id] }, state, instances, TYPES, SHOOT_TYPE, fixedNow);
   assert.equal(result.ok, true);
   const next = result.build.entityActions.reduce((acc, action) => contentEntityReducer(acc, action, fixedNow), state);
   assert.deepEqual(next.shootSessions[0].materialIds, [materials[0].id, materials[1].id]);
-  assert.deepEqual(mp.getReadyForShootMaterials(next).map((m) => m.title), ["Reel C"]);
+  assert.deepEqual(mp.getReadyForShootMaterials(next, instances, TYPES).map((m) => m.title), ["Reel C"]);
 });
 
 test("one Shoot Session produces exactly ONE Shoot task draft referencing every Material, never one per Material", () => {
-  const { state, materials } = worldWithMaterials([
-    { title: "Reel A", format: "REEL", patch: { readyForShoot: true } },
-    { title: "Reel B", format: "REEL", patch: { readyForShoot: true } },
-  ]);
-  const result = mp.buildShootSession({ title: "Shoot", scheduledAt: "2026-10-13", assignee: "Operator 1", materialIds: materials.map((m) => m.id) }, state, SHOOT_TYPE, fixedNow);
+  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }, { title: "Reel B", format: "REEL" }]);
+  const result = mp.buildShootSession({ title: "Shoot", scheduledAt: "2026-10-13", assignee: "Operator 1", materialIds: materials.map((m) => m.id) }, state, materials.map((m) => planning(m)), TYPES, SHOOT_TYPE, fixedNow);
   const draft = result.build.shootTaskDraft;
   assert.deepEqual(draft.contentRef, { entityType: "SHOOT_SESSION", entityId: result.build.session.id });
   assert.deepEqual(draft.relatedEntityRefs.map((r) => r.entityId), materials.map((m) => m.id));
@@ -118,14 +129,15 @@ test("one Shoot Session produces exactly ONE Shoot task draft referencing every 
 
 test("Shoot Session creation rejects a Material that is not Ready for Shoot, an empty selection, and a blank title", () => {
   const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL" }]);
-  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, SHOOT_TYPE, fixedNow).ok, false);
-  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [] }, state, SHOOT_TYPE, fixedNow).ok, false);
-  assert.equal(mp.buildShootSession({ title: "  ", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, SHOOT_TYPE, fixedNow).ok, false);
+  const ready = [planning(materials[0])];
+  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, [], TYPES, SHOOT_TYPE, fixedNow).ok, false);
+  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [] }, state, ready, TYPES, SHOOT_TYPE, fixedNow).ok, false);
+  assert.equal(mp.buildShootSession({ title: "  ", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, ready, TYPES, SHOOT_TYPE, fixedNow).ok, false);
 });
 
 test("a Material already in a session cannot be put into a second session", () => {
-  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL", patch: { readyForShoot: true, shootSessionId: "shoot-1" } }]);
-  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, SHOOT_TYPE, fixedNow).ok, false);
+  const { state, materials } = worldWithMaterials([{ title: "Reel A", format: "REEL", patch: { shootSessionId: "shoot-1" } }]);
+  assert.equal(mp.buildShootSession({ title: "S", scheduledAt: null, assignee: null, materialIds: [materials[0].id] }, state, [planning(materials[0])], TYPES, SHOOT_TYPE, fixedNow).ok, false);
 });
 
 test("a Shoot Session is not a knowledge-tree node and its material references are validated", () => {

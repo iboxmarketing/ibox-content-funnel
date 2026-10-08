@@ -23,18 +23,15 @@ import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
 import { useContentEntityStore } from "@/components/content-entity-store-provider";
 import { labelForRef } from "@/lib/content-entity-store";
 import { entityTypeLabelUz } from "@/lib/content-workflow";
-import { resolveRuntimeHandler, runtimeCompletionErrors, type TaskRuntimeContext } from "@/lib/task-runtime-handlers";
+import { resolveRuntimeHandler, type TaskRuntimeContext } from "@/lib/task-runtime-handlers";
+import { effectiveRequiredFieldsFor, getCompletionState, type ReviewDecision } from "@/lib/task-completion";
 import { TASK_UI_BLOCKS } from "@/components/task-runtime-ui-blocks";
 import {
-  canCompleteTaskInstance,
   provenanceForField,
-  validateTaskInstanceForCompletion,
-  type CompletionValidationError,
   type FieldValue,
   type TaskInstance,
 } from "@/lib/task-instance";
 import { validateTaskLink } from "@/lib/task-link";
-import { effectiveRequiredFields } from "@/lib/workflow-template";
 import { FIELD_TYPES, type FieldDefinition, type FieldType } from "@/lib/task-type";
 
 function FieldInput({ field, value, onChange }: { field: FieldDefinition; value: FieldValue; onChange: (value: FieldValue) => void }) {
@@ -200,11 +197,13 @@ export function TaskDetail({
   instanceId,
   onClose,
   onComplete,
+  onReviewDecision,
   onOpenInstance,
 }: {
   instanceId: string;
   onClose: () => void;
   onComplete: (instance: TaskInstance) => void;
+  onReviewDecision: (instance: TaskInstance, decision: ReviewDecision, note: string) => void;
   onOpenInstance: (instanceId: string) => void;
 }) {
   const { state: contentOsState } = useContentOsStore();
@@ -212,41 +211,38 @@ export function TaskDetail({
   const { state: contentEntityState } = useContentEntityStore();
   const [skipReason, setSkipReason] = useState("");
   const [skipping, setSkipping] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const instance = runtimeState.instances.find((item) => item.id === instanceId) ?? null;
   const taskType = instance ? contentOsState.taskTypes.find((t) => t.id === instance.taskTypeId) ?? null : null;
   const template = instance?.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null;
-  const step = template && instance?.workflowStepId ? template.steps.find((s) => s.id === instance.workflowStepId) ?? null : null;
   const sourceInstance = instance?.sourceTaskId ? runtimeState.instances.find((item) => item.id === instance.sourceTaskId) ?? null : null;
-
-  const requiredFields = useMemo(() => {
-    if (!taskType) return [];
-    return step ? effectiveRequiredFields(taskType.requiredFields, step) : taskType.requiredFields;
-  }, [taskType, step]);
 
   const handler = useMemo(() => (taskType ? resolveRuntimeHandler(taskType.name) : null), [taskType]);
   const hiddenFieldIds = useMemo(() => new Set(handler?.hiddenFieldIds ?? []), [handler]);
   const UiBlock = handler?.uiBlock ? TASK_UI_BLOCKS[handler.uiBlock] : null;
 
-  // Task-type-specific completion rules come from the central handler
-  // registry (lib/task-runtime-handlers.ts) -- never from Task Type names here.
-  const taskSpecificErrors: readonly CompletionValidationError[] = useMemo(() => {
-    if (!instance || !taskType) return [];
-    const context: TaskRuntimeContext = {
+  // Everything about "may this be completed / how" comes from the shared
+  // completion entry point (lib/task-completion.ts): standard validation,
+  // the Task Type's handler rules, and the review requirement. TaskDetail
+  // only renders the result.
+  const completionContext: TaskRuntimeContext | null = useMemo(
+    () => instance && taskType ? {
       instance,
       taskType,
       template,
       allInstances: runtimeState.instances,
       taskTypesById: new Map(contentOsState.taskTypes.map((t) => [t.id, t])),
       content: contentEntityState,
-    };
-    return runtimeCompletionErrors(context);
-  }, [instance, taskType, template, runtimeState.instances, contentOsState.taskTypes, contentEntityState]);
-
-  const completionErrors = useMemo(() => (instance ? [...validateTaskInstanceForCompletion(instance, requiredFields), ...taskSpecificErrors] : []), [instance, requiredFields, taskSpecificErrors]);
+    } : null,
+    [instance, taskType, template, runtimeState.instances, contentOsState.taskTypes, contentEntityState],
+  );
+  const requiredFields = useMemo(() => (completionContext ? effectiveRequiredFieldsFor(completionContext) : []), [completionContext]);
+  const completionState = useMemo(() => (completionContext ? getCompletionState(completionContext) : { errors: [], action: "NONE" as const }), [completionContext]);
+  const completionErrors = completionState.errors;
   const errorByFieldId = useMemo(() => new Map(completionErrors.filter((e) => e.fieldId).map((e) => [e.fieldId as string, e.message])), [completionErrors]);
-  const canComplete = instance ? canCompleteTaskInstance(instance, requiredFields) && taskSpecificErrors.length === 0 : false;
+  const canComplete = completionErrors.length === 0;
   const workingOnLabel = useMemo(() => {
     if (!instance?.contentRef) return null;
     const name = labelForRef(contentEntityState, instance.contentRef);
@@ -294,7 +290,9 @@ export function TaskDetail({
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="space-y-1 text-xs font-semibold text-slate-700">Status
               <select value={instance.status} onChange={(e) => setStatus(instance.id, e.target.value as typeof instance.status)} className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-2 text-xs">
-                {(["ASSIGNED", "IN_PROGRESS", "BLOCKED", "REVIEW", "REVISION", "DONE", "CANCELLED"] as const).map((s) => <option key={s} value={s}>{s}</option>)}
+                {/* Manual statuses only. DONE comes from Complete; REVIEW / REVISION from the review flow. */}
+                {!["ASSIGNED", "IN_PROGRESS", "BLOCKED"].includes(instance.status) && <option value={instance.status} disabled>{instance.status}</option>}
+                {(["ASSIGNED", "IN_PROGRESS", "BLOCKED"] as const).map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
             <label className="space-y-1 text-xs font-semibold text-slate-700">Assignee
@@ -378,9 +376,20 @@ export function TaskDetail({
                 <Button type="button" size="sm" variant="ghost" className="h-8 text-xs text-slate-500" onClick={() => setSkipping(false)}>Bekor qilish</Button>
               </div>
             </div>
-          ) : instance.status !== "DONE" && instance.status !== "CANCELLED" ? (
+          ) : completionState.action === "AWAITING_REVIEW" ? (
+            <div className="space-y-2 rounded-xl border border-violet-200 bg-violet-50 p-3 pb-4">
+              <p className="text-xs font-bold text-violet-900">Review kutilmoqda (Head)</p>
+              <Textarea value={reviewNote} onChange={(e) => setReviewNote(e.target.value)} placeholder="Izoh (ixtiyoriy)" className="min-h-14 bg-white text-xs" />
+              <div className="flex gap-2">
+                <Button type="button" size="sm" className="rounded-lg bg-emerald-600 text-xs hover:bg-emerald-700" onClick={() => { onReviewDecision(instance, "APPROVE", reviewNote); setReviewNote(""); }}>Approve</Button>
+                <Button type="button" size="sm" variant="outline" className="rounded-lg text-xs" onClick={() => { onReviewDecision(instance, "REQUEST_REVISION", reviewNote); setReviewNote(""); }}>Request revision</Button>
+              </div>
+            </div>
+          ) : completionState.action !== "NONE" ? (
             <div className="flex gap-2 pb-4">
-              <Button type="button" className="rounded-xl bg-blue-700 hover:bg-blue-800" disabled={!canComplete} onClick={() => onComplete(instance)}><Check className="size-4" /> Complete</Button>
+              <Button type="button" className="rounded-xl bg-blue-700 hover:bg-blue-800" disabled={!canComplete} onClick={() => onComplete(instance)}>
+                <Check className="size-4" /> {completionState.action === "SUBMIT_FOR_REVIEW" ? "Submit for review" : completionState.action === "RESUBMIT" ? "Resubmit" : "Complete"}
+              </Button>
               <Button type="button" variant="outline" className="rounded-xl" onClick={() => setSkipping(true)}><SkipForward className="size-4" /> Skip</Button>
             </div>
           ) : null}

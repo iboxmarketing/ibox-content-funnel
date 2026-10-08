@@ -4,7 +4,7 @@
  * UI special-cases any of these ids or names. Deleting one from the
  * library (once persistence exists) would not break any code path.
  */
-import { CTA_TYPES } from "./content-entity";
+import { CHANNELS, CTA_TYPES, PUBLISH_CHECK_OUTCOMES, PUBLISH_MODES } from "./content-entity";
 import { createTaskType, type AssigneeRule, type FieldDefinition, type RecommendedDay, type TaskType, type TaskTypeDraft } from "./task-type";
 
 const OWNER: AssigneeRule = { kind: "DEFAULT_CONTENT_OWNER" };
@@ -14,6 +14,8 @@ const textField = (id: string, label: string, required = true): FieldDefinition 
 const longTextField = (id: string, label: string, required = true): FieldDefinition => ({ id, label, type: "LONG_TEXT", required });
 const urlField = (id: string, label: string, required = false): FieldDefinition => ({ id, label, type: "URL", required });
 const booleanField = (id: string, label: string, required = false): FieldDefinition => ({ id, label, type: "BOOLEAN", required });
+const dateTimeField = (id: string, label: string, required = true): FieldDefinition => ({ id, label, type: "DATETIME", required });
+const multiSelectField = (id: string, label: string, options: string[], required = true): FieldDefinition => ({ id, label, type: "MULTI_SELECT", required, options: options.map((value) => ({ value, label: value })) });
 const dateField = (id: string, label: string, required = true): FieldDefinition => ({ id, label, type: "DATE", required });
 const selectField = (id: string, label: string, options: string[], required = true): FieldDefinition => ({ id, label, type: "SELECT", required, options: options.map((value) => ({ value, label: value })) });
 
@@ -215,28 +217,51 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   })),
   seed(draft({
     name: "Distribution Plan",
-    description: "Qaysi kanallarda tarqatilishini tanlash.",
-    requiredFields: [longTextField("channels", "Tanlangan kanallar")],
+    description: "Bitta Material uchun kanallarni qo'lda tanlash. Complete -> kanallar bo'yicha Preview -> Publish/Schedule tasklar.",
+    requiredFields: [multiSelectField("channels", "Kanallar", [...CHANNELS])],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Publish / Schedule",
-    description: "Tanlangan kanal uchun nashr/rejalashtirish.",
-    requiredFields: [dateField("scheduled-publish-at", "Rejalashtirilgan nashr vaqti", true)],
+    description: "Bitta Material x bitta kanal. PUBLISH_NOW yoki SCHEDULE.",
+    requiredFields: [selectField("publish-mode", "Publish Mode", [...PUBLISH_MODES])],
+    // Conditional rules (SCHEDULE needs scheduledPublishAt; PUBLISH_NOW needs
+    // `published` + Result Review Date) live in lib/distribution.ts, not here.
+    optionalFields: [
+      textField("channel", "Kanal (ichki)", false),
+      dateTimeField("scheduled-publish-at", "Scheduled Publish At", false),
+      booleanField("published", "Nashr qilindi", false),
+      dateField("result-review-at", "Result Review Date", false),
+      longTextField("channel-note", "Kanalga xos izoh / copy", false),
+      textField("channel-cta-text", "Kanalga xos CTA matni (ixtiyoriy override)", false),
+    ],
     recommendedDay: "THURSDAY",
-    allowedLinkLabels: ["Published URL"],
+    allowedLinkLabels: ["Published URL", "Final", "Reference"],
   })),
   seed(draft({
     name: "Publish Check",
-    description: "Nashr natijasini tekshirish.",
-    requiredFields: [textField("result", "Natija")],
-    allowedLinkLabels: ["Published URL"],
+    description: "Rostan chiqdidimi? Scheduled post uchun.",
+    requiredFields: [selectField("outcome", "Natija", [...PUBLISH_CHECK_OUTCOMES])],
+    optionalFields: [
+      textField("channel", "Kanal (ichki)", false),
+      dateField("result-review-at", "Result Review Date", false),
+      longTextField("issue-note", "Muammo izohi", false),
+    ],
+    allowedLinkLabels: ["Published URL", "Reference"],
   })),
   seed(draft({
     name: "Learning",
-    description: "Natija, nima ishladi, keyingi qadam.",
-    requiredFields: [textField("result", "Natija"), longTextField("what-worked", "Nima ishladi?"), longTextField("next-step", "Keyingi qadam")],
+    description: "Natija, nima ishladi, keyingi qadam. Faqat shu uchta maydon majburiy.",
+    requiredFields: [textField("result", "Result"), longTextField("what-worked", "What worked?"), longTextField("next-step", "Next step")],
     allowedLinkLabels: ["Reference"],
+  })),
+  // --- V1 Sprint 6 ---
+  seed(draft({
+    name: "Republish / Fix Publish",
+    description: "Publish Check muvaffaqiyatsiz yoki muammoli bo'lganda taklif qilinadigan tuzatish/qayta nashr taski.",
+    requiredFields: [longTextField("fix-notes", "Fix Notes")],
+    optionalFields: [dateTimeField("new-scheduled-publish-at", "Yangi Scheduled Publish At", false), textField("channel", "Kanal (ichki)", false)],
+    allowedLinkLabels: ["Published URL", "Reference"],
   })),
   // --- V1 Sprint 4: first production task per Material format (section 17) ---
   seed(draft({

@@ -124,6 +124,14 @@ function TaskTypeEditor({ draft, onChange }: { draft: TaskTypeDraft; onChange: (
           </Select>
         </label>
         <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 sm:col-span-2"><input type="checkbox" checked={draft.reviewRequired} onChange={(e) => onChange({ ...draft, reviewRequired: e.target.checked })} className="size-4 accent-blue-700" /> Review talab qilinadi</label>
+        {draft.reviewRequired && (
+          <label className="space-y-1.5 text-xs font-semibold text-slate-700 sm:col-span-2">Review bosqichi
+            <select value={draft.reviewStage ?? "DRAFT"} onChange={(e) => onChange({ ...draft, reviewStage: e.target.value as "DRAFT" | "FINAL" })} className="mt-1 h-9 w-full rounded-xl border border-slate-200 bg-white px-2 text-xs">
+              <option value="DRAFT">Draft / Concept (faqat shu taskni to’xtatadi)</option>
+              <option value="FINAL">Final asset (tasdiqlanmaguncha Publish bloklanadi)</option>
+            </select>
+          </label>
+        )}
         <label className="space-y-1.5 text-xs font-semibold text-slate-700 sm:col-span-2">Ruxsat etilgan link label’lar (vergul bilan)<Input value={draft.allowedLinkLabels.join(", ")} onChange={(e) => onChange({ ...draft, allowedLinkLabels: e.target.value.split(",").map((part) => part.trim()).filter(Boolean) })} className="mt-1 h-9 rounded-xl" placeholder="Script, Figma, Raw, Final, Reference" /></label>
       </div>
 
