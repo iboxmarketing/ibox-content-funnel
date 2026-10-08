@@ -49,6 +49,7 @@ import {
   createKnowledgeNode,
   createMaterial,
   createProblemPart,
+  setMaterialStatus,
   type Angle,
   type AngleDestinationLink,
   type AngleUsage,
@@ -66,7 +67,7 @@ import {
   type MaterialFormat,
   type ProblemPart,
 } from "./content-entity";
-import { anglesForKnowledgeNode, type ContentEntityState } from "./content-entity-store";
+import { anglesForKnowledgeNode, type ContentEntityAction, type ContentEntityState } from "./content-entity-store";
 
 export type PreviewMode =
   | "PROBLEM_SPLIT_TO_PARTS"
@@ -74,6 +75,7 @@ export type PreviewMode =
   | "RESEARCH_TO_BLOGS"
   | "ANGLE_TO_ANGLES"
   | "MATERIAL_FORMAT_GROUPS"
+  | "SHOOT_PRODUCTION"
   | "STEP_FANOUT";
 
 /** KNOWLEDGE_DISCOVERY_TO_NODES's per-candidate rows only carry an entity
@@ -126,7 +128,27 @@ export interface MaterialPreviewCandidate {
   readonly taskType: TaskType;
 }
 
-export type PreviewCandidate = TextPreviewCandidate | ResearchPreviewCandidate | AnglePreviewCandidate | StepFanoutPreviewCandidate | MaterialPreviewCandidate;
+/** Sprint 5 (sections 12-13): one of Edit / Cover / Caption for ONE
+ * Material of a completed Shoot Session. All three are REQUIRED -- the
+ * approved rule is that Shoot completion opens them in parallel, so the
+ * preview lets the employee edit title/assignee/deadline but never drop
+ * one (a dropped Edit would silently strand that Material before
+ * Distribution). */
+export interface ProductionTaskPreviewCandidate {
+  readonly kind: "PRODUCTION_TASK";
+  readonly key: string;
+  readonly material: Material;
+  readonly taskType: TaskType;
+  readonly required: true;
+}
+
+export type PreviewCandidate =
+  | TextPreviewCandidate
+  | ResearchPreviewCandidate
+  | AnglePreviewCandidate
+  | StepFanoutPreviewCandidate
+  | MaterialPreviewCandidate
+  | ProductionTaskPreviewCandidate;
 
 export interface PreviewPlan {
   readonly mode: PreviewMode;
@@ -287,16 +309,36 @@ export interface ConfirmOutcome {
   readonly angles: readonly Angle[];
   readonly materials: readonly Material[];
   readonly taskDrafts: readonly TaskInstanceDraft[];
+  /** Any further content-entity mutation a mode needs beyond the typed
+   * fields above (e.g. marking a ShootSession COMPLETED). */
+  readonly entityActions: readonly ContentEntityAction[];
 }
 
-const EMPTY_OUTCOME: ConfirmOutcome = { problemParts: [], knowledgeNodes: [], knowledgeNodeStatusUpdates: [], blogs: [], angles: [], materials: [], taskDrafts: [] };
+const EMPTY_OUTCOME: ConfirmOutcome = { problemParts: [], knowledgeNodes: [], knowledgeNodeStatusUpdates: [], blogs: [], angles: [], materials: [], taskDrafts: [], entityActions: [] };
+
+/** Pure. Every content-entity mutation a confirmed outcome implies, as
+ * reducer actions -- so the orchestrator applies ANY outcome (generic or
+ * handler-produced) through one code path. */
+export function outcomeToEntityActions(outcome: ConfirmOutcome): ContentEntityAction[] {
+  const actions: ContentEntityAction[] = [];
+  if (outcome.problemParts.length) actions.push({ type: "ADD_PROBLEM_PARTS", parts: outcome.problemParts });
+  if (outcome.knowledgeNodes.length) actions.push({ type: "ADD_KNOWLEDGE_NODES", nodes: outcome.knowledgeNodes });
+  if (outcome.blogs.length) actions.push({ type: "ADD_BLOGS", blogs: outcome.blogs });
+  if (outcome.angles.length) actions.push({ type: "ADD_ANGLES", angles: outcome.angles });
+  if (outcome.materials.length) actions.push({ type: "ADD_MATERIALS", materials: outcome.materials });
+  for (const update of outcome.knowledgeNodeStatusUpdates) actions.push({ type: "SET_KNOWLEDGE_NODE_STATUS", id: update.id, status: update.status });
+  actions.push(...outcome.entityActions);
+  return actions;
+}
 
 /** Pure. `plan` must be the exact plan the UI rendered; `selections` is
  * the employee's final edited/include state for each candidate, keyed by
  * `PreviewCandidate.key`. Only `included` candidates produce anything. */
 export function confirmPreviewPlan(plan: PreviewPlan, selections: readonly CandidateSelectionState[], now: () => string = () => new Date().toISOString()): ConfirmOutcome {
   const selectionByKey = new Map(selections.filter((s) => s.included).map((s) => [s.key, s]));
-  if (!selectionByKey.size) return EMPTY_OUTCOME;
+  // SHOOT_PRODUCTION's tasks are all required, so "nothing selected" is not
+  // a way to create nothing there -- only Cancel (never calling confirm) is.
+  if (!selectionByKey.size && plan.mode !== "SHOOT_PRODUCTION") return EMPTY_OUTCOME;
 
   switch (plan.mode) {
     case "PROBLEM_SPLIT_TO_PARTS":
@@ -309,6 +351,8 @@ export function confirmPreviewPlan(plan: PreviewPlan, selections: readonly Candi
       return confirmAngle(plan, selectionByKey, now);
     case "MATERIAL_FORMAT_GROUPS":
       return confirmMaterialFormatGroups(plan, selectionByKey, now);
+    case "SHOOT_PRODUCTION":
+      return confirmShootProduction(plan, selections, now);
     case "STEP_FANOUT":
       return { ...EMPTY_OUTCOME, taskDrafts: confirmStepFanoutCandidates(plan, plan.candidates as readonly StepFanoutPreviewCandidate[], selectionByKey) };
     default:
@@ -431,7 +475,9 @@ function confirmMaterialFormatGroups(plan: PreviewPlan, selectionByKey: Readonly
       },
       now,
     );
-    materials.push(material);
+    // Section 16: the first authoring task is created together with the
+    // Material, so it starts IN_PRODUCTION rather than lingering PLANNED.
+    materials.push(setMaterialStatus(material, "IN_PRODUCTION", now));
     // Only the FIRST production task is created (section 17) -- never
     // the rest of the chain. Standalone: Material production isn't part
     // of any WorkflowTemplate graph.
@@ -459,6 +505,67 @@ function confirmStepFanoutCandidates(
     taskDrafts.push({ ...seed, title: selection.title.trim() || seed.title, assignee: selection.assignee.trim() || null, deadline: selection.deadline || null, fieldValues: transferred.fieldValues, fieldProvenance: transferred.fieldProvenance });
   }
   return taskDrafts;
+}
+
+// --- Shoot completion (Sprint 5, sections 11-13) ---
+
+/** The three tasks every Material of a completed Shoot Session gets, in
+ * parallel. Approved product rule -- not configurable per session. */
+export const SHOOT_PRODUCTION_TASK_TYPE_NAMES = ["Edit", "Cover", "Caption"] as const;
+
+/** Pure. `shootInstance`'s contentRef points at the ShootSession (the
+ * smallest clear representation of a batch task -- see
+ * material-production.ts); its materials come from the session, never
+ * from guessing. One candidate per (Material x Edit/Cover/Caption); returns
+ * null if the session or its materials cannot be resolved. */
+export function buildShootProductionPlan(
+  shootInstance: TaskInstance,
+  contentEntities: ContentEntityState,
+  taskTypesById: ReadonlyMap<string, TaskType>,
+): PreviewPlan | null {
+  const sessionRef = shootInstance.contentRef;
+  if (!sessionRef || sessionRef.entityType !== "SHOOT_SESSION") return null;
+  const session = contentEntities.shootSessions.find((s) => s.id === sessionRef.entityId);
+  const sourceTaskType = taskTypesById.get(shootInstance.taskTypeId);
+  if (!session || !sourceTaskType) return null;
+  const taskTypeByName = new Map([...taskTypesById.values()].map((t) => [t.name, t]));
+
+  const candidates: PreviewCandidate[] = [];
+  for (const materialId of session.materialIds) {
+    const material = contentEntities.materials.find((m) => m.id === materialId);
+    if (!material) continue;
+    for (const name of SHOOT_PRODUCTION_TASK_TYPE_NAMES) {
+      const taskType = taskTypeByName.get(name);
+      if (!taskType) continue;
+      candidates.push({ kind: "PRODUCTION_TASK", key: `${material.id}-${name}`, material, taskType, required: true });
+    }
+  }
+  if (!candidates.length) return null;
+  return { mode: "SHOOT_PRODUCTION", sourceInstance: shootInstance, sourceTaskType, targetStep: null, targetTaskType: null, candidates };
+}
+
+function confirmShootProduction(plan: PreviewPlan, selections: readonly CandidateSelectionState[], now: () => string): ConfirmOutcome {
+  void now;
+  const selectionByKey = new Map(selections.map((s) => [s.key, s]));
+  const taskDrafts: TaskInstanceDraft[] = [];
+  for (const candidate of plan.candidates.filter((c): c is ProductionTaskPreviewCandidate => c.kind === "PRODUCTION_TASK")) {
+    // Required: an `included: false` selection is ignored on purpose.
+    const selection = selectionByKey.get(candidate.key);
+    const defaultTitle = `${candidate.taskType.name} — ${candidate.material.title}`;
+    const seed = buildStandaloneTaskInstanceSeed(candidate.taskType, defaultTitle, plan.sourceInstance.id, ref("MATERIAL", candidate.material.id));
+    const transferred = selection ? applyContextTransfer(seed, plan.sourceInstance, selection.selections) : { fieldValues: seed.fieldValues, fieldProvenance: [] };
+    taskDrafts.push({
+      ...seed,
+      title: selection?.title.trim() || defaultTitle,
+      assignee: selection ? selection.assignee.trim() || null : seed.assignee,
+      deadline: selection?.deadline || null,
+      fieldValues: transferred.fieldValues,
+      fieldProvenance: transferred.fieldProvenance,
+    });
+  }
+  const sessionRef = plan.sourceInstance.contentRef;
+  const entityActions: ContentEntityAction[] = sessionRef?.entityType === "SHOOT_SESSION" ? [{ type: "SET_SHOOT_SESSION_STATUS", id: sessionRef.entityId, status: "COMPLETED" }] : [];
+  return { ...EMPTY_OUTCOME, taskDrafts, entityActions };
 }
 
 // --- Destination Decision (sections 7-9): handled directly, not through
@@ -550,6 +657,7 @@ const ENTITY_TYPE_LABELS_UZ: Record<ContentEntityRef["entityType"], string> = {
   ANGLE: "Angle",
   DESTINATION: "Destination",
   REPURPOSE_MAP: "Repurpose Map",
+  SHOOT_SESSION: "Shoot Session",
 };
 
 export function entityTypeLabelUz(entityType: ContentEntityRef["entityType"]): string {

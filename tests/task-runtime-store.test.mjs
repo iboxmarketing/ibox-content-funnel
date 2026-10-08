@@ -163,3 +163,14 @@ test("ADD_ATOMIC_IDEA_DRAFT / UPDATE_ATOMIC_IDEA_DRAFT / REMOVE_ATOMIC_IDEA_DRAF
   state = taskRuntimeReducer(state, { type: "REMOVE_ATOMIC_IDEA_DRAFT", instanceId: id, draftId: "d1" }, fixedNow);
   assert.equal(instanceById(state, id).atomicIdeaDrafts.length, 0);
 });
+
+test("SET_DEADLINE / SET_ASSIGNEE edit a task created outside a Generated Preview (Planning, Shoot, ...)", () => {
+  let state = addInstances(initialTaskRuntimeState(), [draft()]);
+  const id = state.instances[0].id;
+  state = taskRuntimeReducer(state, { type: "SET_DEADLINE", instanceId: id, deadline: "2026-10-20" }, fixedNow);
+  state = taskRuntimeReducer(state, { type: "SET_ASSIGNEE", instanceId: id, assignee: "  Operator  " }, fixedNow);
+  assert.equal(instanceById(state, id).deadline, "2026-10-20");
+  assert.equal(instanceById(state, id).assignee, "Operator");
+  state = taskRuntimeReducer(state, { type: "SET_DEADLINE", instanceId: id, deadline: null }, fixedNow);
+  assert.equal(instanceById(state, id).deadline, null);
+});

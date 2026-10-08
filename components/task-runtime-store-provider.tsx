@@ -25,6 +25,8 @@ interface TaskRuntimeStoreValue {
    * right after Confirm. */
   readonly createInstances: (drafts: readonly TaskInstanceDraft[]) => readonly TaskInstance[];
   readonly setStatus: (instanceId: string, status: TaskInstanceStatus) => void;
+  readonly setDeadline: (instanceId: string, deadline: string | null) => void;
+  readonly setAssignee: (instanceId: string, assignee: string | null) => void;
   readonly setFieldValue: (instanceId: string, fieldId: string, value: FieldValue) => void;
   readonly editTransferredFieldValue: (instanceId: string, fieldId: string, value: FieldValue, writeBack?: { sourceTaskId: string; sourceFieldId: string }) => void;
   readonly addCustomField: (instanceId: string, field: FieldDefinition) => void;
@@ -51,6 +53,8 @@ export function TaskRuntimeStoreProvider({ children }: { children: ReactNode }) 
     return instances;
   }, []);
   const setStatus = useCallback((instanceId: string, status: TaskInstanceStatus) => dispatch({ type: "SET_STATUS", instanceId, status }), []);
+  const setDeadline = useCallback((instanceId: string, deadline: string | null) => dispatch({ type: "SET_DEADLINE", instanceId, deadline }), []);
+  const setAssignee = useCallback((instanceId: string, assignee: string | null) => dispatch({ type: "SET_ASSIGNEE", instanceId, assignee }), []);
   const setFieldValue = useCallback((instanceId: string, fieldId: string, value: FieldValue) => dispatch({ type: "SET_FIELD_VALUE", instanceId, fieldId, value }), []);
   const editTransferredFieldValue = useCallback(
     (instanceId: string, fieldId: string, value: FieldValue, writeBack?: { sourceTaskId: string; sourceFieldId: string }) =>
@@ -71,11 +75,11 @@ export function TaskRuntimeStoreProvider({ children }: { children: ReactNode }) 
 
   const value = useMemo<TaskRuntimeStoreValue>(
     () => ({
-      state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
+      state, createInstances, setStatus, setDeadline, setAssignee, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
       addAtomicIdeaDraft, updateAtomicIdeaDraft, removeAtomicIdeaDraft, addLink, updateLink, removeLink, complete, skip, addSuggestion,
     }),
     [
-      state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
+      state, createInstances, setStatus, setDeadline, setAssignee, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
       addAtomicIdeaDraft, updateAtomicIdeaDraft, removeAtomicIdeaDraft, addLink, updateLink, removeLink, complete, skip, addSuggestion,
     ],
   );

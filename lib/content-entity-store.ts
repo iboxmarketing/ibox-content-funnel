@@ -13,8 +13,11 @@ import {
   setBlogState,
   setDestinationStatus,
   setKnowledgeNodeStatus,
+  setMaterialCta,
   setMaterialDestination,
+  setMaterialProduction,
   setMaterialStatus,
+  setShootSessionStatus,
   type Angle,
   type AngleDestinationLink,
   type AtomicIdea,
@@ -27,8 +30,11 @@ import {
   type Domain,
   type KnowledgeNode,
   type KnowledgeNodeStatus,
+  type CtaType,
   type Material,
   type MaterialStatus,
+  type ShootSession,
+  type ShootSessionStatus,
   type ProblemCategory,
   type ProblemPart,
   type RepurposeMap,
@@ -47,6 +53,7 @@ export interface ContentEntityState {
   readonly angleDestinationLinks: readonly AngleDestinationLink[];
   readonly repurposeMaps: readonly RepurposeMap[];
   readonly atomicIdeas: readonly AtomicIdea[];
+  readonly shootSessions: readonly ShootSession[];
 }
 
 export function initialContentEntityState(): ContentEntityState {
@@ -66,6 +73,7 @@ export function emptyContentEntityState(): ContentEntityState {
     angleDestinationLinks: [],
     repurposeMaps: [],
     atomicIdeas: [],
+    shootSessions: [],
   };
 }
 
@@ -86,7 +94,11 @@ export type ContentEntityAction =
   | { readonly type: "SET_DESTINATION_STATUS"; readonly id: string; readonly status: DestinationStatus }
   | { readonly type: "ADD_ANGLE_DESTINATION_LINKS"; readonly links: readonly AngleDestinationLink[] }
   | { readonly type: "ADD_REPURPOSE_MAP"; readonly repurposeMap: RepurposeMap }
-  | { readonly type: "ADD_ATOMIC_IDEAS"; readonly ideas: readonly AtomicIdea[] };
+  | { readonly type: "ADD_ATOMIC_IDEAS"; readonly ideas: readonly AtomicIdea[] }
+  | { readonly type: "SET_MATERIAL_CTA"; readonly id: string; readonly ctaType: CtaType; readonly ctaText: string; readonly destinationId: string | null }
+  | { readonly type: "SET_MATERIAL_PRODUCTION"; readonly id: string; readonly readyForShoot?: boolean; readonly shootSessionId?: string | null }
+  | { readonly type: "ADD_SHOOT_SESSION"; readonly session: ShootSession }
+  | { readonly type: "SET_SHOOT_SESSION_STATUS"; readonly id: string; readonly status: ShootSessionStatus };
 
 /** Pure. Never mutates `state`. */
 export function contentEntityReducer(state: ContentEntityState, action: ContentEntityAction, now: () => string = () => new Date().toISOString()): ContentEntityState {
@@ -144,6 +156,25 @@ export function contentEntityReducer(state: ContentEntityState, action: ContentE
       return { ...state, repurposeMaps: [...state.repurposeMaps, action.repurposeMap] };
     case "ADD_ATOMIC_IDEAS":
       return { ...state, atomicIdeas: [...state.atomicIdeas, ...action.ideas] };
+    case "SET_MATERIAL_CTA": {
+      const current = state.materials.find((material) => material.id === action.id);
+      if (!current) return state;
+      const next = setMaterialCta(current, { ctaType: action.ctaType, ctaText: action.ctaText, destinationId: action.destinationId }, now);
+      return { ...state, materials: state.materials.map((material) => (material.id === action.id ? next : material)) };
+    }
+    case "SET_MATERIAL_PRODUCTION": {
+      const current = state.materials.find((material) => material.id === action.id);
+      if (!current) return state;
+      const next = setMaterialProduction(current, { readyForShoot: action.readyForShoot, shootSessionId: action.shootSessionId }, now);
+      return { ...state, materials: state.materials.map((material) => (material.id === action.id ? next : material)) };
+    }
+    case "ADD_SHOOT_SESSION":
+      return { ...state, shootSessions: [...state.shootSessions, action.session] };
+    case "SET_SHOOT_SESSION_STATUS": {
+      const current = state.shootSessions.find((session) => session.id === action.id);
+      if (!current) return state;
+      return { ...state, shootSessions: state.shootSessions.map((session) => (session.id === action.id ? setShootSessionStatus(current, action.status, now) : session)) };
+    }
     default:
       return state;
   }
@@ -193,6 +224,16 @@ export function materialsForDestination(state: ContentEntityState, destinationId
   return state.materials.filter((material) => material.destinationId === destinationId);
 }
 
+/** Section 4: the Destination Library a Material may pick from is the one
+ * scoped to its own ProblemCategory (Material -> Blog -> KnowledgeNode ->
+ * ProblemPart -> ProblemCategory). */
+export function problemCategoryIdForMaterial(state: ContentEntityState, material: Material): string | null {
+  const blog = state.blogs.find((b) => b.id === material.blogId);
+  const node = blog ? state.knowledgeNodes.find((n) => n.id === blog.knowledgeNodeId) : undefined;
+  const part = node ? state.problemParts.find((p) => p.id === node.problemPartId) : undefined;
+  return part?.problemCategoryId ?? null;
+}
+
 export function repurposeMapForBlog(state: ContentEntityState, blogId: string): RepurposeMap | undefined {
   return state.repurposeMaps.find((map) => map.blogId === blogId);
 }
@@ -204,7 +245,7 @@ export function atomicIdeasForRepurposeMap(state: ContentEntityState, repurposeM
 export function entityByRef(
   state: ContentEntityState,
   entityRef: ContentEntityRef,
-): Domain | ProblemCategory | ProblemPart | KnowledgeNode | Blog | Material | Angle | Destination | RepurposeMap | undefined {
+): Domain | ProblemCategory | ProblemPart | KnowledgeNode | Blog | Material | Angle | Destination | RepurposeMap | ShootSession | undefined {
   switch (entityRef.entityType) {
     case "DOMAIN":
       return state.domains.find((e) => e.id === entityRef.entityId);
@@ -224,6 +265,8 @@ export function entityByRef(
       return state.destinations.find((e) => e.id === entityRef.entityId);
     case "REPURPOSE_MAP":
       return state.repurposeMaps.find((e) => e.id === entityRef.entityId);
+    case "SHOOT_SESSION":
+      return state.shootSessions.find((e) => e.id === entityRef.entityId);
     default:
       return undefined;
   }
@@ -251,7 +294,8 @@ export type ContentTreeValidationErrorCode =
   | "ORPHAN_DESTINATION"
   | "ORPHAN_ANGLE_DESTINATION_LINK"
   | "ORPHAN_REPURPOSE_MAP"
-  | "ORPHAN_ATOMIC_IDEA";
+  | "ORPHAN_ATOMIC_IDEA"
+  | "ORPHAN_SHOOT_SESSION";
 
 export interface ContentTreeValidationError {
   readonly code: ContentTreeValidationErrorCode;
@@ -304,6 +348,11 @@ export function validateContentTree(state: ContentEntityState): ContentTreeValid
   }
   for (const idea of state.atomicIdeas) {
     if (!repurposeMapIds.has(idea.repurposeMapId)) errors.push({ code: "ORPHAN_ATOMIC_IDEA", entityId: idea.id, message: `Atomic Idea "${idea.id}" noma'lum Repurpose Map'ga ishora qiladi.` });
+  }
+
+  const materialIds = new Set(state.materials.map((m) => m.id));
+  for (const session of state.shootSessions) {
+    if (session.materialIds.some((id) => !materialIds.has(id))) errors.push({ code: "ORPHAN_SHOOT_SESSION", entityId: session.id, message: `Shoot Session "${session.title}" noma'lum Material'ga ishora qiladi.` });
   }
 
   return errors;

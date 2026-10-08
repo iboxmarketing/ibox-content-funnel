@@ -14,6 +14,8 @@ import {
   markTaskInstanceDone,
   removeAtomicIdeaDraft,
   removeCustomFieldFromInstance,
+  setTaskInstanceAssignee,
+  setTaskInstanceDeadline,
   setTaskInstanceFieldValue,
   setTaskInstanceStatus,
   skipTaskInstance,
@@ -43,6 +45,8 @@ export type TaskRuntimeAction =
    * navigate straight to the first newly-generated task after Confirm. */
   | { readonly type: "ADD_INSTANCES"; readonly instances: readonly TaskInstance[] }
   | { readonly type: "SET_STATUS"; readonly instanceId: string; readonly status: TaskInstanceStatus }
+  | { readonly type: "SET_DEADLINE"; readonly instanceId: string; readonly deadline: string | null }
+  | { readonly type: "SET_ASSIGNEE"; readonly instanceId: string; readonly assignee: string | null }
   | { readonly type: "SET_FIELD_VALUE"; readonly instanceId: string; readonly fieldId: string; readonly value: FieldValue }
   | { readonly type: "EDIT_TRANSFERRED_FIELD_VALUE"; readonly instanceId: string; readonly fieldId: string; readonly value: FieldValue; readonly alsoUpdateSourceTaskId?: string; readonly sourceFieldId?: string }
   | { readonly type: "ADD_CUSTOM_FIELD"; readonly instanceId: string; readonly field: FieldDefinition }
@@ -70,6 +74,14 @@ export function taskRuntimeReducer(state: TaskRuntimeState, action: TaskRuntimeA
     case "SET_STATUS": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
       return withInstance(state, action.instanceId, (instance) => setTaskInstanceStatus(instance, action.status, now));
+    }
+    case "SET_DEADLINE": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => setTaskInstanceDeadline(instance, action.deadline, now));
+    }
+    case "SET_ASSIGNEE": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => setTaskInstanceAssignee(instance, action.assignee, now));
     }
     case "SET_FIELD_VALUE": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;

@@ -42,7 +42,9 @@
     "test:task-runtime-store": "node --test tests/task-runtime-store.test.mjs",
     "test:content-entity": "node --test tests/content-entity.test.mjs",
     "test:content-entity-store": "node --test tests/content-entity-store.test.mjs",
-    "test:content-workflow": "node --test tests/content-workflow.test.mjs"
+    "test:content-workflow": "node --test tests/content-workflow.test.mjs",
+    "test:material-production": "node --test tests/material-production.test.mjs",
+    "test:task-runtime-handlers": "node --test tests/task-runtime-handlers.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

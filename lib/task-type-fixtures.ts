@@ -4,6 +4,7 @@
  * UI special-cases any of these ids or names. Deleting one from the
  * library (once persistence exists) would not break any code path.
  */
+import { CTA_TYPES } from "./content-entity";
 import { createTaskType, type AssigneeRule, type FieldDefinition, type RecommendedDay, type TaskType, type TaskTypeDraft } from "./task-type";
 
 const OWNER: AssigneeRule = { kind: "DEFAULT_CONTENT_OWNER" };
@@ -15,6 +16,14 @@ const urlField = (id: string, label: string, required = false): FieldDefinition 
 const booleanField = (id: string, label: string, required = false): FieldDefinition => ({ id, label, type: "BOOLEAN", required });
 const dateField = (id: string, label: string, required = true): FieldDefinition => ({ id, label, type: "DATE", required });
 const selectField = (id: string, label: string, options: string[], required = true): FieldDefinition => ({ id, label, type: "SELECT", required, options: options.map((value) => ({ value, label: value })) });
+
+/** Sprint 5 (section 5-6): the CTA part shared by every authoring Task Type
+ * -- chosen AFTER Material creation, as the last required part of the
+ * task. `cta-destination-id` is owned by Task Detail's CTA panel (hidden
+ * from the generic field loop), required only when the Material needs an
+ * exact Destination (see material-production.ts). */
+const CTA_REQUIRED_FIELDS = (): FieldDefinition[] => [selectField("cta-type", "CTA Type", [...CTA_TYPES]), textField("cta-text", "CTA Text")];
+const CTA_OPTIONAL_FIELDS = (): FieldDefinition[] => [textField("cta-destination-id", "CTA Destination (ichki)", false)];
 
 function draft(input: {
   name: string;
@@ -141,14 +150,16 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Reel Script",
     description: "Qisqa video uchun ssenariy.",
-    requiredFields: [longTextField("script", "Ssenariy")],
+    requiredFields: [textField("hook", "Hook"), longTextField("script", "Script"), ...CTA_REQUIRED_FIELDS()],
+    optionalFields: CTA_OPTIONAL_FIELDS(),
     defaultPrompt: "Quyidagi atomic idea asosida reel ssenariysi yoz.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Script", "Reference"],
   })),
   seed(draft({
     name: "Carousel",
     description: "Karusel slaydlari va matni.",
-    requiredFields: [longTextField("slides", "Slayd matnlari")],
+    requiredFields: [longTextField("slide-structure", "Slide Structure"), longTextField("copy", "Copy"), ...CTA_REQUIRED_FIELDS()],
+    optionalFields: CTA_OPTIONAL_FIELDS(),
     defaultPrompt: "Quyidagi atomic idea asosida karusel matnini yoz.\n\n---\nINPUT:\n",
     recommendedDay: "WEDNESDAY",
     allowedLinkLabels: ["Figma", "Final"],
@@ -156,14 +167,21 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Text Post",
     description: "Matnli post.",
-    requiredFields: [longTextField("body", "Post matni")],
+    requiredFields: [longTextField("post", "Post"), ...CTA_REQUIRED_FIELDS()],
+    optionalFields: CTA_OPTIONAL_FIELDS(),
     defaultPrompt: "Quyidagi atomic idea asosida matnli post yoz.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Reference", "Final"],
   })),
   seed(draft({
     name: "Planning",
-    description: "Haftalik/oylik ishlab chiqarish rejasi.",
-    requiredFields: [dateField("target-week", "Maqsad hafta")],
+    description: "Reel/YouTube Material uchun ishlab chiqarish rejasi -- Shoot Session'dan oldin.",
+    requiredFields: [dateField("desired-shoot-date", "Desired Shoot Date")],
+    optionalFields: [
+      textField("location", "Location", false),
+      textField("talent", "People / Talent", false),
+      longTextField("equipment", "Equipment / Props", false),
+      longTextField("production-notes", "Production Notes", false),
+    ],
     recommendedDay: "MONDAY",
     allowedLinkLabels: ["Reference"],
   })),
@@ -224,7 +242,8 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "YouTube",
     description: "YouTube uchun birinchi production task (script/outline).",
-    requiredFields: [longTextField("script", "Script / Outline")],
+    requiredFields: [longTextField("outline", "Outline"), longTextField("script", "Script"), ...CTA_REQUIRED_FIELDS()],
+    optionalFields: [longTextField("production-notes", "Production Notes", false), ...CTA_OPTIONAL_FIELDS()],
     defaultPrompt: "Quyidagi atomic idea asosida YouTube video script/outline yoz.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Script", "Reference"],
   })),

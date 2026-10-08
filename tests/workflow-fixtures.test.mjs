@@ -7,7 +7,7 @@ import { join } from "node:path";
 import ts from "typescript";
 
 const dir = mkdtempSync(join(tmpdir(), "ibox-workflow-fixtures-"));
-for (const name of ["task-type", "task-type-fixtures", "workflow-template", "workflow-template-fixtures"]) {
+for (const name of ["content-entity", "task-type", "task-type-fixtures", "workflow-template", "workflow-template-fixtures"]) {
   const source = readFileSync(new URL(`../lib/${name}.ts`, import.meta.url), "utf8");
   writeFileSync(join(dir, `${name}.js`), ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 }

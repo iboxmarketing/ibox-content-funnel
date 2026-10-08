@@ -9,6 +9,7 @@ import {
   Check,
   ChevronRight,
   CircleDot,
+  Clapperboard,
   Columns3,
   FileStack,
   FilterX,
@@ -85,7 +86,7 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun" | "contentTree";
+type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun" | "contentTree" | "production";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
@@ -100,6 +101,7 @@ const ProductionSettings = dynamic(() => import("@/components/production-setting
 const TaskTypeLibrary = dynamic(() => import("@/components/task-type-library").then((module) => module.TaskTypeLibrary), { ssr: false });
 const WorkflowTemplateBuilder = dynamic(() => import("@/components/workflow-template-builder").then((module) => module.WorkflowTemplateBuilder), { ssr: false });
 const WorkflowRunView = dynamic(() => import("@/components/workflow-run-view").then((module) => module.WorkflowRunView), { ssr: false });
+const MaterialProductionView = dynamic(() => import("@/components/material-production-view").then((module) => module.MaterialProductionView), { ssr: false });
 const ContentTreeView = dynamic(() => import("@/components/content-tree-view").then((module) => module.ContentTreeView), { ssr: false });
 
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
@@ -111,6 +113,7 @@ const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }>
   { id: "workflows", label: "Workflow Builder", icon: GitBranch },
   { id: "workflowRun", label: "Workflow Run", icon: PlaySquare },
   { id: "contentTree", label: "Content Tree", icon: FileStack },
+  { id: "production", label: "Production Queue", icon: Clapperboard },
   { id: "settings", label: "Sozlamalar", icon: Settings2 },
 ];
 
@@ -355,7 +358,7 @@ export function KnowledgeOS() {
   }, [loadData]);
 
   useEffect(() => {
-    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun" || activeView === "contentTree") return;
+    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun" || activeView === "contentTree" || activeView === "production") return;
     // Load production data only when an operational view is opened. Task
     // Type Library / Workflow Builder / Workflow Run / Content Tree are
     // local/session-only config + runtime tools (V1 Sprint 1-3) and never
@@ -626,6 +629,11 @@ export function KnowledgeOS() {
           <div className="relative h-full min-h-0">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
             <WorkflowRunView />
+          </div>
+        ) : activeView === "production" ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <MaterialProductionView />
           </div>
         ) : activeView === "contentTree" ? (
           <div className="relative h-full min-h-0">

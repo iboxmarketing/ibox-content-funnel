@@ -19,7 +19,7 @@
  * existing public.tasks.id -- content_task_links is not implemented.
  */
 
-export const CONTENT_ENTITY_TYPES = ["DOMAIN", "PROBLEM_CATEGORY", "PROBLEM_PART", "KNOWLEDGE_NODE", "BLOG", "MATERIAL", "ANGLE", "DESTINATION", "REPURPOSE_MAP"] as const;
+export const CONTENT_ENTITY_TYPES = ["DOMAIN", "PROBLEM_CATEGORY", "PROBLEM_PART", "KNOWLEDGE_NODE", "BLOG", "MATERIAL", "ANGLE", "DESTINATION", "REPURPOSE_MAP", "SHOOT_SESSION"] as const;
 export type ContentEntityType = (typeof CONTENT_ENTITY_TYPES)[number];
 
 /** A typed pointer from a TaskInstance to one entity. This is the local
@@ -145,6 +145,12 @@ export type MaterialFormat = (typeof MATERIAL_FORMATS)[number];
 export const MATERIAL_STATUSES = ["PLANNED", "IN_PRODUCTION", "READY", "PUBLISHED"] as const;
 export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
 
+/** Section 3 (Sprint 5): the CTA belongs to the Material -- never a
+ * separate Task, never a library. Selected AFTER Material creation, as
+ * the last required part of the authoring task. */
+export const CTA_TYPES = ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "WATCH_YOUTUBE", "NEXT_CONTENT", "RESOURCE", "COMMERCIAL", "CUSTOM"] as const;
+export type CtaType = (typeof CTA_TYPES)[number];
+
 /**
  * One Material per confirmed (AtomicIdea, format) pair -- the same Atomic
  * Idea selected for Reel + Carousel + Text produces three Material
@@ -163,6 +169,14 @@ export interface Material {
   readonly angleId: string | null;
   readonly destinationNeeded: boolean;
   readonly destinationId: string | null;
+  /** Sprint 5: null until the authoring task completes. */
+  readonly ctaType: CtaType | null;
+  readonly ctaText: string | null;
+  /** Sprint 5 (section 9): set when Planning completes. Not a task status
+   * and not a Material status -- just "eligible for a Shoot Session". */
+  readonly readyForShoot: boolean;
+  /** Sprint 5: set once the Material is manually put into a Shoot Session. */
+  readonly shootSessionId: string | null;
   readonly status: MaterialStatus;
   readonly sourceTaskId: string | null;
   readonly createdAt: string;
@@ -192,6 +206,10 @@ export function createMaterial(
     angleId: input.angleId ?? null,
     destinationNeeded: input.destinationNeeded ?? false,
     destinationId: input.destinationId ?? null,
+    ctaType: null,
+    ctaText: null,
+    readyForShoot: false,
+    shootSessionId: null,
     status: "PLANNED",
     sourceTaskId: input.sourceTaskId ?? null,
     createdAt: timestamp,
@@ -206,6 +224,27 @@ export function setMaterialStatus(material: Material, status: MaterialStatus, no
 
 export function setMaterialDestination(material: Material, destinationId: string | null, now: () => string = () => new Date().toISOString()): Material {
   return { ...material, destinationId, updatedAt: now() };
+}
+
+export function setMaterialCta(
+  material: Material,
+  cta: { ctaType: CtaType; ctaText: string; destinationId: string | null },
+  now: () => string = () => new Date().toISOString(),
+): Material {
+  return { ...material, ctaType: cta.ctaType, ctaText: cta.ctaText, destinationId: cta.destinationId, updatedAt: now() };
+}
+
+export function setMaterialProduction(
+  material: Material,
+  changes: { readyForShoot?: boolean; shootSessionId?: string | null },
+  now: () => string = () => new Date().toISOString(),
+): Material {
+  return {
+    ...material,
+    readyForShoot: changes.readyForShoot ?? material.readyForShoot,
+    shootSessionId: changes.shootSessionId === undefined ? material.shootSessionId : changes.shootSessionId,
+    updatedAt: now(),
+  };
 }
 
 // --- Angle (section 2): local to one KnowledgeNode, never a global library ---
@@ -401,4 +440,43 @@ export function createAtomicIdea(
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+// --- ShootSession (Sprint 5, section 10): created manually, never
+// auto-batched; NOT a knowledge-tree node. ---
+
+export const SHOOT_SESSION_STATUSES = ["PLANNED", "COMPLETED"] as const;
+export type ShootSessionStatus = (typeof SHOOT_SESSION_STATUSES)[number];
+
+export interface ShootSession {
+  readonly id: string;
+  readonly title: string;
+  readonly scheduledAt: string | null;
+  readonly assignee: string | null;
+  readonly materialIds: readonly string[];
+  readonly status: ShootSessionStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export function createShootSession(
+  input: { title: string; scheduledAt: string | null; assignee: string | null; materialIds: readonly string[] },
+  now: () => string = () => new Date().toISOString(),
+): ShootSession {
+  const timestamp = now();
+  return {
+    id: stableEntityId("shoot", input.title, now),
+    title: input.title,
+    scheduledAt: input.scheduledAt,
+    assignee: input.assignee,
+    materialIds: input.materialIds,
+    status: "PLANNED",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export function setShootSessionStatus(session: ShootSession, status: ShootSessionStatus, now: () => string = () => new Date().toISOString()): ShootSession {
+  if (session.status === status) return session;
+  return { ...session, status, updatedAt: now() };
 }

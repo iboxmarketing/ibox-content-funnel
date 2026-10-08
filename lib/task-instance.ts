@@ -154,6 +154,16 @@ export function setTaskInstanceStatus(instance: TaskInstance, status: TaskInstan
   return { ...instance, status, updatedAt: now() };
 }
 
+/** Tasks created outside a Generated Preview (Planning, Destination-creation,
+ * etc.) have no deadline/assignee yet -- Task Detail edits them directly. */
+export function setTaskInstanceDeadline(instance: TaskInstance, deadline: string | null, now: () => string = () => new Date().toISOString()): TaskInstance {
+  return { ...instance, deadline: deadline || null, updatedAt: now() };
+}
+
+export function setTaskInstanceAssignee(instance: TaskInstance, assignee: string | null, now: () => string = () => new Date().toISOString()): TaskInstance {
+  return { ...instance, assignee: assignee?.trim() || null, updatedAt: now() };
+}
+
 export function setTaskInstanceFieldValue(instance: TaskInstance, fieldId: string, value: FieldValue, now: () => string = () => new Date().toISOString()): TaskInstance {
   return { ...instance, fieldValues: { ...instance.fieldValues, [fieldId]: value }, updatedAt: now() };
 }

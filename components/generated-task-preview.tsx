@@ -51,22 +51,23 @@ function defaultTitleFor(candidate: PreviewCandidate): string {
   if (candidate.kind === "STEP_FANOUT") return candidate.step.nameTemplate;
   if (candidate.kind === "RESEARCH_TO_BLOGS") return `${candidate.node.name} — blog`;
   if (candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA") return `${candidate.atomicIdea.text} — ${candidate.format}`;
+  if (candidate.kind === "PRODUCTION_TASK") return `${candidate.taskType.name} — ${candidate.material.title}`;
   return candidate.text;
 }
 
 function defaultAssigneeFor(candidate: PreviewCandidate): string {
-  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? candidate.taskType : undefined;
+  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" ? candidate.taskType : undefined;
   return taskType?.defaultAssigneeRule.kind === "FIXED_ROLE" ? taskType.defaultAssigneeRule.role : "";
 }
 
 /** Whether this one candidate creates a task directly (title/assignee/
  * deadline/transfer are meaningful) vs. only an entity (just a name). */
 function candidateCreatesTask(candidate: PreviewCandidate): boolean {
-  return candidate.kind === "RESEARCH_TO_BLOGS" || candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA";
+  return candidate.kind === "RESEARCH_TO_BLOGS" || candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK";
 }
 
 function candidateTaskTypeFor(candidate: PreviewCandidate, planTargetTaskType: TaskType | null): TaskType | null {
-  if (candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA") return candidate.taskType;
+  if (candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK") return candidate.taskType;
   return planTargetTaskType;
 }
 
@@ -132,11 +133,12 @@ function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, 
   return (
     <div className={`rounded-xl border p-3 transition ${row.included ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
       <div className="flex items-center gap-2">
-        <input type="checkbox" className="size-4 accent-blue-700" checked={row.included} onChange={(e) => onChange({ included: e.target.checked })} />
+        <input type="checkbox" className="size-4 accent-blue-700" checked={candidate.kind === "PRODUCTION_TASK" ? true : row.included} disabled={candidate.kind === "PRODUCTION_TASK"} onChange={(e) => onChange({ included: e.target.checked })} />
+        {candidate.kind === "PRODUCTION_TASK" && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-[10px] text-amber-800">Majburiy</Badge>}
         {candidate.kind === "STEP_FANOUT" && <Badge variant="outline" className="text-[10px]">{candidate.step.blocking ? "blocking" : "non-blocking"}</Badge>}
         {candidate.kind === "RESEARCH_TO_BLOGS" && <Badge variant="outline" className="text-[10px]">UNPLANNED</Badge>}
         <strong className="text-sm text-slate-950">
-          {candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? candidate.taskType.name : null}
+          {candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" || candidate.kind === "PRODUCTION_TASK" ? candidate.taskType.name : null}
         </strong>
       </div>
 
@@ -212,16 +214,19 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
 
   const sharedRow = rows.find((r) => r.key === SHARED_TASK_SELECTION_KEY);
 
-  const materialGroups = useMemo(() => {
-    if (plan.mode !== "MATERIAL_FORMAT_GROUPS") return null;
-    const groups = new Map<string, PreviewCandidate[]>();
+  // Visually separated groups: by format for Material previews (section
+  // 15 of Sprint 4), by Material for post-Shoot production tasks (Sprint 5).
+  const groups = useMemo(() => {
+    if (plan.mode !== "MATERIAL_FORMAT_GROUPS" && plan.mode !== "SHOOT_PRODUCTION") return null;
+    const grouped = new Map<string, PreviewCandidate[]>();
     for (const candidate of plan.candidates) {
-      if (candidate.kind !== "MATERIAL_FROM_ATOMIC_IDEA") continue;
-      const list = groups.get(candidate.format) ?? [];
+      const label = candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? FORMAT_GROUP_LABELS[candidate.format] ?? candidate.format : candidate.kind === "PRODUCTION_TASK" ? candidate.material.title : null;
+      if (!label) continue;
+      const list = grouped.get(label) ?? [];
       list.push(candidate);
-      groups.set(candidate.format, list);
+      grouped.set(label, list);
     }
-    return groups;
+    return grouped;
   }, [plan]);
 
   return (
@@ -234,14 +239,19 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
           &ldquo;{plan.sourceInstance.title}&rdquo; bajarildi deb belgilanadi. Quyidagilarni ko&apos;rib chiqing, kerak bo&apos;lsa tahrirlang, so&apos;ng Confirm bosing. Faqat tanlanganlar yaratiladi.
         </p>
 
-        {materialGroups ? (
+        {groups ? (
           <div className="space-y-5">
-            {[...materialGroups.entries()].map(([format, candidates]) => {
+            {plan.mode === "SHOOT_PRODUCTION" && (
+              <label className="flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50/60 p-2 text-[11px] font-semibold text-slate-700">Common deadline (hammasi uchun)
+                <Input type="date" onChange={(e) => applyGroupDeadline(plan.candidates.map((c) => c.key), e.target.value)} className="h-7 w-36 bg-white text-xs" />
+              </label>
+            )}
+            {[...groups.entries()].map(([format, candidates]) => {
               const keys = candidates.map((c) => c.key);
               return (
                 <div key={format} className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-950">{FORMAT_GROUP_LABELS[format] ?? format}</h3>
+                    <h3 className="text-sm font-bold text-slate-950">{format}</h3>
                     <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">Shared deadline
                       <Input type="date" onChange={(e) => applyGroupDeadline(keys, e.target.value)} className="h-7 w-36 text-xs" />
                     </label>

@@ -20,19 +20,10 @@ import { useContentEntityStore } from "@/components/content-entity-store-provide
 import { TaskDetail } from "@/components/task-detail";
 import { GeneratedTaskPreview } from "@/components/generated-task-preview";
 import { buildTaskInstanceSeed, getStartableSteps } from "@/lib/workflow-runtime";
-import {
-  applyDestinationDecision,
-  buildFormatPreviewPlan,
-  buildPreviewPlan,
-  confirmAtomicIdeaDrafts,
-  confirmPreviewPlan,
-  type CandidateSelectionState,
-  type PreviewPlan,
-} from "@/lib/content-workflow";
-import { blogsForNode } from "@/lib/content-entity-store";
-import { createRepurposeMap, ref } from "@/lib/content-entity";
-import { validateAtomicIdeaCoverage, type TaskInstance } from "@/lib/task-instance";
-import type { TaskType } from "@/lib/task-type";
+import { confirmPreviewPlan, outcomeToEntityActions, type CandidateSelectionState, type PreviewPlan } from "@/lib/content-workflow";
+import { runTaskCompletion } from "@/lib/task-runtime-handlers";
+import { ref } from "@/lib/content-entity";
+import type { TaskInstance } from "@/lib/task-instance";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   DONE: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -54,6 +45,8 @@ export function WorkflowRunView() {
     [runtimeState.instances, selectedTemplateId],
   );
 
+  // Tasks outside any WorkflowTemplate (Material production, Shoot, Destination creation).
+  const standaloneInstances = useMemo(() => runtimeState.instances.filter((instance) => !instance.workflowTemplateId), [runtimeState.instances]);
   const startableSteps = template ? getStartableSteps(template, instancesForTemplate) : [];
   const hasStarted = instancesForTemplate.length > 0;
 
@@ -74,103 +67,42 @@ export function WorkflowRunView() {
     setOpenInstanceId(created[0]?.id ?? null);
   }
 
-  /** Checks whether `instance`'s settlement unlocks anything further
-   * (plain STEP_FANOUT or any other mode) and either opens that Preview
-   * or falls back to the given instance id. Shared by the generic path
-   * and the two special-cased Task Types below, all of which still need
-   * this same "what's next" check after their own direct side effects.
-   * Returns whether a plan was found -- callers must not call `complete`
-   * themselves when it returns true (React state updates are not
-   * synchronous, so the caller can't just re-read `pendingPlan` after). */
-  function checkForFollowUpPreview(instance: TaskInstance, sourceTaskType: TaskType, fallbackInstanceId: string | null): boolean {
-    const instanceTemplate = instance.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null;
-    if (!instanceTemplate) {
-      setOpenInstanceId(fallbackInstanceId);
-      return false;
-    }
-    const settledSourceInstance: TaskInstance = { ...instance, status: "DONE", outcome: "COMPLETED" };
-    const plan = buildPreviewPlan({
-      template: instanceTemplate,
-      allInstances: runtimeState.instances,
-      settledSourceInstance,
-      sourceTaskType,
-      taskTypesById,
-      contentEntities: contentEntityStore.state,
-    });
-    if (plan) {
-      setPendingPlan(plan);
-      return true;
-    }
-    setOpenInstanceId(fallbackInstanceId);
-    return false;
-  }
-
-  /** Destination Decision (sections 7-9): the reuse/create-new outcome is
-   * applied directly -- there is nothing left to "preview" (the task's
-   * own fields + DestinationDecisionBlock's UI already captured the
-   * decision). Repurpose Map's eligibility is still checked normally
-   * afterward, exactly like any other task's completion. */
-  function handleDestinationDecisionComplete(instance: TaskInstance, sourceTaskType: TaskType) {
-    const outcome = applyDestinationDecision(instance, contentEntityStore.state, taskTypesById);
-    if (outcome.destination) contentEntityStore.addDestination(outcome.destination);
-    contentEntityStore.addAngleDestinationLinks(outcome.angleDestinationLinks);
-    const createdFirstTask = outcome.firstTaskDraft ? createInstances([outcome.firstTaskDraft]) : [];
-    complete(instance.id);
-    checkForFollowUpPreview(instance, sourceTaskType, createdFirstTask[0]?.id ?? instance.id);
-  }
-
-  /** Repurpose Map (sections 12-17): the AtomicIdeaDraft -> AtomicIdea
-   * conversion happens directly at Complete time (the drafts were already
-   * live-edited inside the task via RepurposeMapBlock) -- only the
-   * FORMAT-specific Material previews that follow go through the normal
-   * Preview/Confirm pipeline, via buildFormatPreviewPlan. `complete(instance.id)`
-   * for THIS task only fires once that preview is confirmed (or
-   * immediately, if there is nothing to preview), matching the rest of
-   * the app's "DONE only together with what it generates" rule. */
-  function handleRepurposeMapComplete(instance: TaskInstance) {
-    if (validateAtomicIdeaCoverage(instance.atomicIdeaDrafts).length) return;
-    const node = instance.contentRef?.entityType === "KNOWLEDGE_NODE" ? contentEntityStore.state.knowledgeNodes.find((n) => n.id === instance.contentRef?.entityId) ?? null : null;
-    const blog = node ? blogsForNode(contentEntityStore.state, node.id)[0] ?? null : null;
-    if (!blog) {
-      complete(instance.id);
-      setOpenInstanceId(instance.id);
-      return;
-    }
-    const repurposeMap = createRepurposeMap(blog.id, instance.id);
-    contentEntityStore.addRepurposeMap(repurposeMap);
-    const ideas = confirmAtomicIdeaDrafts(repurposeMap.id, instance.atomicIdeaDrafts);
-    contentEntityStore.addAtomicIdeas(ideas);
-    const plan = buildFormatPreviewPlan(instance, blog.id, ideas, taskTypesById);
-    if (!plan) {
-      complete(instance.id);
-      setOpenInstanceId(instance.id);
-      return;
-    }
-    setPendingPlan(plan);
-  }
-
+  /** Completing a task is delegated entirely to the central runtime
+   * handler registry (lib/task-runtime-handlers.ts): this view never
+   * inspects a Task Type name. The handler returns the content-entity
+   * mutations, the new TaskInstance drafts, an optional Generated Preview,
+   * and whether the task is DONE immediately or only once that preview is
+   * confirmed. */
   function handleRequestComplete(instance: TaskInstance) {
-    const sourceTaskType = taskTypesById.get(instance.taskTypeId) ?? null;
-    if (sourceTaskType?.name === "Destination Decision") return handleDestinationDecisionComplete(instance, sourceTaskType);
-    if (sourceTaskType?.name === "Repurpose Map") return handleRepurposeMapComplete(instance);
-    if (!instance.workflowTemplateId || !instance.workflowStepId || !sourceTaskType) {
+    const taskType = taskTypesById.get(instance.taskTypeId);
+    if (!taskType) {
       complete(instance.id);
       setOpenInstanceId(null);
       return;
     }
-    const foundPlan = checkForFollowUpPreview(instance, sourceTaskType, null);
-    if (!foundPlan) complete(instance.id);
+    const instanceTemplate = instance.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null;
+    const result = runTaskCompletion({
+      instance,
+      taskType,
+      template: instanceTemplate,
+      allInstances: runtimeState.instances,
+      taskTypesById,
+      content: contentEntityStore.state,
+    });
+    contentEntityStore.applyActions(result.entityActions);
+    const created = result.taskDrafts.length ? createInstances(result.taskDrafts) : [];
+    if (result.completeNow) complete(instance.id);
+    if (result.plan) {
+      setPendingPlan(result.plan);
+      return;
+    }
+    setOpenInstanceId(created[0]?.id ?? null);
   }
 
   function handlePreviewConfirm(selections: readonly CandidateSelectionState[]) {
     if (!pendingPlan) return;
     const outcome = confirmPreviewPlan(pendingPlan, selections);
-    contentEntityStore.addProblemParts(outcome.problemParts);
-    contentEntityStore.addKnowledgeNodes(outcome.knowledgeNodes);
-    contentEntityStore.addBlogs(outcome.blogs);
-    contentEntityStore.addAngles(outcome.angles);
-    contentEntityStore.addMaterials(outcome.materials);
-    for (const update of outcome.knowledgeNodeStatusUpdates) contentEntityStore.setKnowledgeNodeStatus(update.id, update.status);
+    contentEntityStore.applyActions(outcomeToEntityActions(outcome));
     const created = createInstances(outcome.taskDrafts);
     complete(pendingPlan.sourceInstance.id);
     setPendingPlan(null);
@@ -229,6 +161,21 @@ export function WorkflowRunView() {
                       </button>
                     );
                   })}
+                </div>
+              )}
+              {standaloneInstances.length > 0 && (
+                <div className="space-y-2 pt-2">
+                  <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950"><ListTodo className="size-4 text-blue-700" /> Material va boshqa tasklar ({standaloneInstances.length})</h3>
+                  {standaloneInstances.map((instance) => (
+                    <button key={instance.id} type="button" onClick={() => setOpenInstanceId(instance.id)} className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left hover:border-blue-200">
+                      {instance.status === "DONE" && <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-950">{instance.title}</p>
+                        <p className="text-[11px] text-slate-500">{taskTypesById.get(instance.taskTypeId)?.name ?? instance.taskTypeId}</p>
+                      </div>
+                      <Badge variant="outline" className={STATUS_BADGE_CLASS[instance.status] ?? "border-blue-200 bg-blue-50 text-blue-700"}>{instance.status}</Badge>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>

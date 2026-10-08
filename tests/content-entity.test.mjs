@@ -31,6 +31,12 @@ const {
   createAngleDestinationLink,
   createRepurposeMap,
   createAtomicIdea,
+  setMaterialCta,
+  setMaterialProduction,
+  createShootSession,
+  setShootSessionStatus,
+  MATERIAL_STATUSES,
+  CTA_TYPES,
 } = require(join(dir, "content-entity.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -180,4 +186,37 @@ test("entity ids are never shaped like task ids (no accidental id-space collisio
   assert.ok(node.id.startsWith("node-"));
   assert.ok(!domain.id.startsWith("ti-"));
   assert.ok(!node.id.startsWith("ti-"));
+});
+
+test("Material starts with no CTA, not shoot-ready, and outside any Shoot Session", () => {
+  const material = createMaterial({ blogId: "b", title: "Reel", format: "REEL", primaryAtomicIdeaId: "i" }, fixedNow);
+  assert.equal(material.ctaType, null);
+  assert.equal(material.ctaText, null);
+  assert.equal(material.readyForShoot, false);
+  assert.equal(material.shootSessionId, null);
+});
+
+test("setMaterialCta stores the CTA on the Material; setMaterialProduction touches only production flags", () => {
+  const material = createMaterial({ blogId: "b", title: "Reel", format: "REEL", primaryAtomicIdeaId: "i" }, fixedNow);
+  const withCta = setMaterialCta(material, { ctaType: "RESOURCE", ctaText: "Oling", destinationId: "dest-1" }, fixedNow);
+  assert.deepEqual([withCta.ctaType, withCta.ctaText, withCta.destinationId], ["RESOURCE", "Oling", "dest-1"]);
+  const ready = setMaterialProduction(withCta, { readyForShoot: true }, fixedNow);
+  assert.equal(ready.readyForShoot, true);
+  assert.equal(ready.shootSessionId, null);
+  assert.equal(ready.ctaText, "Oling");
+  assert.equal(setMaterialProduction(ready, { shootSessionId: "s-1" }, fixedNow).shootSessionId, "s-1");
+});
+
+test("CTA types and the minimal Material status vocabulary", () => {
+  assert.deepEqual([...CTA_TYPES], ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "WATCH_YOUTUBE", "NEXT_CONTENT", "RESOURCE", "COMMERCIAL", "CUSTOM"]);
+  assert.deepEqual([...MATERIAL_STATUSES], ["PLANNED", "IN_PRODUCTION", "READY", "PUBLISHED"]);
+});
+
+test("createShootSession holds many Materials, starts PLANNED, and is a no-op to re-set the same status", () => {
+  const session = createShootSession({ title: "Tuesday Shoot", scheduledAt: "2026-10-13", assignee: null, materialIds: ["m1", "m2"] }, fixedNow);
+  assert.equal(session.status, "PLANNED");
+  assert.deepEqual(session.materialIds, ["m1", "m2"]);
+  assert.ok(session.id.startsWith("shoot-"));
+  assert.equal(setShootSessionStatus(session, "PLANNED", fixedNow), session);
+  assert.equal(setShootSessionStatus(session, "COMPLETED", fixedNow).status, "COMPLETED");
 });

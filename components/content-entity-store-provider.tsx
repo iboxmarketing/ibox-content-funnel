@@ -51,6 +51,9 @@ interface ContentEntityStoreValue {
   readonly addAngleDestinationLinks: (links: readonly AngleDestinationLink[]) => void;
   readonly addRepurposeMap: (repurposeMap: RepurposeMap) => void;
   readonly addAtomicIdeas: (ideas: readonly AtomicIdea[]) => void;
+  /** Applies any list of reducer actions in order -- the one path every
+   * handler/preview outcome uses to mutate content entities. */
+  readonly applyActions: (actions: readonly ContentEntityAction[]) => void;
 }
 
 const ContentEntityStoreContext = createContext<ContentEntityStoreValue | null>(null);
@@ -76,6 +79,8 @@ export function ContentEntityStoreProvider({ children }: { children: ReactNode }
   const addRepurposeMap = useCallback((repurposeMap: RepurposeMap) => dispatch({ type: "ADD_REPURPOSE_MAP", repurposeMap }), []);
   const addAtomicIdeas = useCallback((ideas: readonly AtomicIdea[]) => { if (ideas.length) dispatch({ type: "ADD_ATOMIC_IDEAS", ideas }); }, []);
 
+  const applyActions = useCallback((actions: readonly ContentEntityAction[]) => { for (const action of actions) dispatch(action); }, []);
+
   const value = useMemo<ContentEntityStoreValue>(
     () => ({
       state,
@@ -96,11 +101,12 @@ export function ContentEntityStoreProvider({ children }: { children: ReactNode }
       addAngleDestinationLinks,
       addRepurposeMap,
       addAtomicIdeas,
+      applyActions,
     }),
     [
       state, addProblemCategory, addProblemParts, addKnowledgeNodes, setKnowledgeNodeStatus, addBlogs, setBlogState, setBlogPrimaryLink,
       addMaterial, addMaterials, setMaterialStatus, setMaterialDestination, addAngles, addDestination, setDestinationStatus,
-      addAngleDestinationLinks, addRepurposeMap, addAtomicIdeas,
+      addAngleDestinationLinks, addRepurposeMap, addAtomicIdeas, applyActions,
     ],
   );
 

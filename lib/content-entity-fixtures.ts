@@ -55,4 +55,5 @@ export const QOLDIQ_CONTENT_ENTITY_FIXTURE: ContentEntityState = {
   angleDestinationLinks: [],
   repurposeMaps: [],
   atomicIdeas: [],
+  shootSessions: [],
 };
