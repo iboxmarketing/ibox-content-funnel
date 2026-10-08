@@ -10,10 +10,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   FIELD_TYPES,
   RECOMMENDED_DAYS,
-  createTaskType,
-  duplicateTaskType,
-  reviseTaskType,
-  setTaskTypeActive,
   validateTaskType,
   type AssigneeRule,
   type FieldDefinition,
@@ -22,7 +18,7 @@ import {
   type TaskType,
   type TaskTypeDraft,
 } from "@/lib/task-type";
-import { TASK_TYPE_FIXTURES } from "@/lib/task-type-fixtures";
+import { useContentOsStore } from "@/components/content-os-store-provider";
 
 function emptyDraft(): TaskTypeDraft {
   return {
@@ -139,7 +135,8 @@ function TaskTypeEditor({ draft, onChange }: { draft: TaskTypeDraft; onChange: (
 }
 
 export function TaskTypeLibrary() {
-  const [taskTypes, setTaskTypes] = useState<TaskType[]>(() => structuredClone(TASK_TYPE_FIXTURES) as TaskType[]);
+  const { state, createTaskType, reviseTaskType, duplicateTaskType, setTaskTypeActive } = useContentOsStore();
+  const taskTypes = state.taskTypes;
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(taskTypes[0]?.id ?? null);
   const [draft, setDraft] = useState<TaskTypeDraft | null>(null);
@@ -172,29 +169,25 @@ export function TaskTypeLibrary() {
     if (errors.length) { setNotice(`Saqlanmadi: ${errors.length} ta xato bor.`); return; }
     if (draftIsNew) {
       const created = createTaskType(draft);
-      setTaskTypes((current) => [...current, created]);
       setSelectedId(created.id);
       setNotice(`"${created.name}" yaratildi (lokal sessiya).`);
     } else if (selected) {
-      const revised = reviseTaskType(selected, draft);
-      setTaskTypes((current) => current.map((t) => t.id === selected.id ? revised : t));
-      setNotice(`"${revised.name}" yangilandi — v${revised.version} (lokal sessiya).`);
+      reviseTaskType(selected.id, draft);
+      setNotice(`"${draft.name}" yangilandi — v${selected.version + 1} (lokal sessiya).`);
     }
     setDraft(null);
     setDraftIsNew(false);
   }
 
   function duplicate(taskType: TaskType) {
-    const copy = duplicateTaskType(taskType);
-    setTaskTypes((current) => [...current, copy]);
-    setSelectedId(copy.id);
+    const copy = duplicateTaskType(taskType.id);
+    if (copy) setSelectedId(copy.id);
     setNotice(`"${taskType.name}" nusxalandi.`);
   }
 
   function toggleActive(taskType: TaskType) {
-    const next = setTaskTypeActive(taskType, !taskType.isActive);
-    setTaskTypes((current) => current.map((t) => t.id === taskType.id ? next : t));
-    setNotice(`"${taskType.name}" ${next.isActive ? "faollashtirildi" : "o'chirildi"}.`);
+    setTaskTypeActive(taskType.id, !taskType.isActive);
+    setNotice(`"${taskType.name}" ${!taskType.isActive ? "faollashtirildi" : "o'chirildi"}.`);
   }
 
   return (

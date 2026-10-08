@@ -34,7 +34,12 @@
     "test:task-client-signed-service-security": "node --test tests/task-client-signed-service-security.test.mjs",
     "test:task-type": "node --test tests/task-type.test.mjs",
     "test:workflow-template": "node --test tests/workflow-template.test.mjs",
-    "test:workflow-fixtures": "node --test tests/workflow-fixtures.test.mjs"
+    "test:workflow-fixtures": "node --test tests/workflow-fixtures.test.mjs",
+    "test:content-os-store": "node --test tests/content-os-store.test.mjs",
+    "test:task-link": "node --test tests/task-link.test.mjs",
+    "test:task-instance": "node --test tests/task-instance.test.mjs",
+    "test:workflow-runtime": "node --test tests/workflow-runtime.test.mjs",
+    "test:task-runtime-store": "node --test tests/task-runtime-store.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

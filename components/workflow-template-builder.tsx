@@ -7,30 +7,20 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { TASK_TYPE_FIXTURES } from "@/lib/task-type-fixtures";
 import {
   MODULE_TYPES,
-  addStep,
-  createWorkflowTemplate,
-  removeStep,
-  reorderSteps,
-  reviseWorkflowTemplate,
-  updateStep,
   validateWorkflowTemplate,
   type ModuleType,
   type WorkflowStep,
-  type WorkflowTemplate,
 } from "@/lib/workflow-template";
-import { WORKFLOW_TEMPLATE_FIXTURES } from "@/lib/workflow-template-fixtures";
-
-const TASK_TYPES = TASK_TYPE_FIXTURES.filter((taskType) => taskType.isActive);
-const TASK_TYPE_IDS = new Set(TASK_TYPES.map((taskType) => taskType.id));
+import { useContentOsStore } from "@/components/content-os-store-provider";
 
 function StepRow({
   step,
   index,
   total,
   allSteps,
+  availableTaskTypes,
   onChange,
   onMove,
   onRemove,
@@ -39,6 +29,7 @@ function StepRow({
   index: number;
   total: number;
   allSteps: readonly WorkflowStep[];
+  availableTaskTypes: readonly { id: string; name: string }[];
   onChange: (changes: Partial<WorkflowStep>) => void;
   onMove: (direction: -1 | 1) => void;
   onRemove: () => void;
@@ -62,7 +53,7 @@ function StepRow({
         <label className="space-y-1 text-[11px] font-semibold text-slate-600">Task Type
           <Select value={step.taskTypeId} onValueChange={(value) => onChange({ taskTypeId: value })}>
             <SelectTrigger className="mt-1 h-8 w-full text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>{TASK_TYPES.map((taskType) => <SelectItem key={taskType.id} value={taskType.id}>{taskType.name}</SelectItem>)}</SelectContent>
+            <SelectContent>{availableTaskTypes.map((taskType) => <SelectItem key={taskType.id} value={taskType.id}>{taskType.name}</SelectItem>)}</SelectContent>
           </Select>
         </label>
         <div className="space-y-1 text-[11px] font-semibold text-slate-600">Dependencies
@@ -105,39 +96,56 @@ function StepRow({
 }
 
 function ValidationPanel({ errors }: { errors: ReturnType<typeof validateWorkflowTemplate> }) {
+  const blocking = errors.filter((error) => error.severity === "ERROR");
+  const warnings = errors.filter((error) => error.severity === "WARNING");
   if (!errors.length) {
     return <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800"><CheckCircle2 className="size-4" /> Validatsiyadan o’tdi — xato yo’q.</div>;
   }
   return (
-    <div className="rounded-xl border border-red-200 bg-red-50 p-3">
-      <p className="flex items-center gap-2 text-xs font-bold text-red-800"><AlertTriangle className="size-4" /> {errors.length} ta validatsiya xatosi</p>
-      <ul className="mt-2 space-y-1.5 text-[11px] text-red-700">{errors.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {error.message}</li>)}</ul>
+    <div className="space-y-2">
+      {blocking.length > 0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-3">
+          <p className="flex items-center gap-2 text-xs font-bold text-red-800"><AlertTriangle className="size-4" /> {blocking.length} ta xato — saqlashni to’xtatadi</p>
+          <ul className="mt-2 space-y-1.5 text-[11px] text-red-700">{blocking.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {error.message}</li>)}</ul>
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <p className="flex items-center gap-2 text-xs font-bold text-amber-800"><AlertTriangle className="size-4" /> {warnings.length} ta ogohlantirish — saqlashga xalaqit bermaydi</p>
+          <ul className="mt-2 space-y-1.5 text-[11px] text-amber-700">{warnings.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {error.message}</li>)}</ul>
+        </div>
+      )}
     </div>
   );
 }
 
 export function WorkflowTemplateBuilder() {
-  const [templates, setTemplates] = useState<WorkflowTemplate[]>(() => structuredClone(WORKFLOW_TEMPLATE_FIXTURES) as WorkflowTemplate[]);
+  const {
+    state,
+    createWorkflowTemplate,
+    reviseWorkflowTemplate,
+    addWorkflowStep,
+    removeWorkflowStep,
+    updateWorkflowStep,
+    reorderWorkflowSteps,
+  } = useContentOsStore();
+  const templates = state.workflowTemplates;
+  const availableTaskTypes = useMemo(() => state.taskTypes.filter((taskType) => taskType.isActive), [state.taskTypes]);
+  const availableTaskTypeIds = useMemo(() => new Set(availableTaskTypes.map((taskType) => taskType.id)), [availableTaskTypes]);
   const [selectedId, setSelectedId] = useState<string | null>(templates[0]?.id ?? null);
   const [notice, setNotice] = useState("Sessiya-only konfiguratsiya · hech qanday real task yaratilmaydi.");
   const template = templates.find((item) => item.id === selectedId) ?? null;
-  const errors = useMemo(() => template ? validateWorkflowTemplate(template, TASK_TYPE_IDS) : [], [template]);
-
-  function updateTemplate(next: WorkflowTemplate) {
-    setTemplates((current) => current.map((item) => item.id === next.id ? next : item));
-  }
+  const errors = useMemo(() => template ? validateWorkflowTemplate(template, availableTaskTypeIds) : [], [template, availableTaskTypeIds]);
 
   function createNew() {
     const created = createWorkflowTemplate({ name: "Yangi workflow", description: "", moduleType: "OTHER" });
-    setTemplates((current) => [...current, created]);
     setSelectedId(created.id);
     setNotice("Yangi workflow yaratildi (lokal sessiya).");
   }
 
   function addNewStep() {
-    if (!template || !TASK_TYPES[0]) return;
-    const next = addStep(template, { taskTypeId: TASK_TYPES[0].id, nameTemplate: TASK_TYPES[0].name, dependsOn: [], blocking: false, skippable: false });
-    updateTemplate(next);
+    if (!template || !availableTaskTypes[0]) return;
+    addWorkflowStep(template.id, { taskTypeId: availableTaskTypes[0].id, nameTemplate: availableTaskTypes[0].name, dependsOn: [], blocking: false, skippable: false });
   }
 
   function moveStep(stepId: string, direction: -1 | 1) {
@@ -147,7 +155,7 @@ export function WorkflowTemplateBuilder() {
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= ids.length) return;
     [ids[index], ids[targetIndex]] = [ids[targetIndex], ids[index]];
-    updateTemplate(reorderSteps(template, ids));
+    reorderWorkflowSteps(template.id, ids);
   }
 
   return (
@@ -176,14 +184,14 @@ export function WorkflowTemplateBuilder() {
             <div className="mx-auto max-w-3xl space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1 text-xs font-semibold text-slate-700">Nomi<Input value={template.name} onChange={(e) => updateTemplate(reviseWorkflowTemplate(template, { name: e.target.value }))} className="mt-1 h-9" /></label>
+                  <label className="space-y-1 text-xs font-semibold text-slate-700">Nomi<Input value={template.name} onChange={(e) => reviseWorkflowTemplate(template.id, { name: e.target.value })} className="mt-1 h-9" /></label>
                   <label className="space-y-1 text-xs font-semibold text-slate-700">Module type
-                    <Select value={template.moduleType} onValueChange={(value) => updateTemplate(reviseWorkflowTemplate(template, { moduleType: value as ModuleType }))}>
+                    <Select value={template.moduleType} onValueChange={(value) => reviseWorkflowTemplate(template.id, { moduleType: value as ModuleType })}>
                       <SelectTrigger className="mt-1 h-9 w-full"><SelectValue /></SelectTrigger>
                       <SelectContent>{MODULE_TYPES.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}</SelectContent>
                     </Select>
                   </label>
-                  <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">Tavsif<Textarea value={template.description} onChange={(e) => updateTemplate(reviseWorkflowTemplate(template, { description: e.target.value }))} className="mt-1 min-h-14" /></label>
+                  <label className="space-y-1 text-xs font-semibold text-slate-700 sm:col-span-2">Tavsif<Textarea value={template.description} onChange={(e) => reviseWorkflowTemplate(template.id, { description: e.target.value })} className="mt-1 min-h-14" /></label>
                 </div>
               </div>
 
@@ -198,9 +206,10 @@ export function WorkflowTemplateBuilder() {
                     index={index}
                     total={template.steps.length}
                     allSteps={template.steps}
-                    onChange={(changes) => updateTemplate(updateStep(template, step.id, changes))}
+                    availableTaskTypes={availableTaskTypes}
+                    onChange={(changes) => updateWorkflowStep(template.id, step.id, changes)}
                     onMove={(direction) => moveStep(step.id, direction)}
-                    onRemove={() => updateTemplate(removeStep(template, step.id))}
+                    onRemove={() => removeWorkflowStep(template.id, step.id)}
                   />
                 ))}
                 {!template.steps.length && <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-400">Hali step yo’q.</div>}

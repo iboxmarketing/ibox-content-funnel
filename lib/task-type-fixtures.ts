@@ -14,6 +14,7 @@ const longTextField = (id: string, label: string, required = true): FieldDefinit
 const urlField = (id: string, label: string, required = false): FieldDefinition => ({ id, label, type: "URL", required });
 const booleanField = (id: string, label: string, required = false): FieldDefinition => ({ id, label, type: "BOOLEAN", required });
 const dateField = (id: string, label: string, required = true): FieldDefinition => ({ id, label, type: "DATE", required });
+const selectField = (id: string, label: string, options: string[], required = true): FieldDefinition => ({ id, label, type: "SELECT", required, options: options.map((value) => ({ value, label: value })) });
 
 function draft(input: {
   name: string;
@@ -54,26 +55,27 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Problem Split",
     description: "Canonical muammoni Problem Part'larga ajratish.",
-    requiredFields: [longTextField("problem-parts", "Problem Part'lar ro'yxati")],
+    requiredFields: [longTextField("components", "Components")],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Knowledge Discovery",
     description: "Bitta Problem Part uchun Knowledge Node nomzodlarini aniqlash.",
-    requiredFields: [longTextField("candidate-nodes", "Nomzod Knowledge Node'lar")],
+    requiredFields: [longTextField("knowledge-nodes", "Knowledge Nodes")],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Research",
     description: "Bog'langan Knowledge Node'lar uchun umumiy research artefakti.",
-    requiredFields: [longTextField("research-summary", "Research xulosasi")],
+    requiredFields: [urlField("research-link", "Research Link", true), longTextField("research-summary", "Research Summary")],
     recommendedDay: "MONDAY",
     allowedLinkLabels: ["Reference", "Raw"],
   })),
   seed(draft({
     name: "Blog",
     description: "Canonical blog qoralamasi — birlamchi bilim hujjati.",
-    requiredFields: [textField("title", "Sarlavha"), longTextField("body", "Blog matni")],
+    requiredFields: [urlField("blog-link", "Blog Link", true), textField("blog-title", "Blog Title")],
+    optionalFields: [longTextField("body", "Blog matni", false)],
     defaultPrompt: "Quyidagi research asosida blog qoralamasini yoz.\n\n---\nINPUT:\n",
     reviewRequired: true,
     allowedLinkLabels: ["Reference", "Final"],
@@ -81,27 +83,27 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Head Review",
     description: "Head tasdig'i — muhim aktivlar uchun.",
-    requiredFields: [booleanField("approved", "Tasdiqlandi")],
+    requiredFields: [selectField("review-decision", "Review Decision", ["Approved", "Rejected"]), longTextField("review-note", "Review Note")],
     allowedLinkLabels: ["Reference"],
     defaultAssigneeRule: fixedRole("Head"),
   })),
   seed(draft({
     name: "SEO",
     description: "SEO optimizatsiyasi — Head tasdig'ini kutmaydi.",
-    requiredFields: [textField("meta-title", "Meta sarlavha"), textField("meta-description", "Meta tavsif")],
+    requiredFields: [longTextField("seo-notes", "SEO Notes")],
     defaultAssigneeRule: fixedRole("SEO"),
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Angle",
     description: "Knowledge Node uchun kamida 5 angle ishlab chiqish.",
-    requiredFields: [longTextField("angles", "Angle ro'yxati (kamida 5)")],
+    requiredFields: [longTextField("angles", "Angles")],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Performance Consultation",
     description: "Digital marketer bilan destination/offer/CTA maslahati.",
-    requiredFields: [longTextField("recommendation", "Tavsiya")],
+    requiredFields: [longTextField("recommendation", "Recommendation")],
     defaultAssigneeRule: fixedRole("Digital marketer"),
     allowedLinkLabels: ["Reference"],
   })),
@@ -114,7 +116,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Repurpose Map",
     description: "Blog'dan atomic idea'larni qo'lda ajratib olish.",
-    requiredFields: [longTextField("atomic-ideas", "Atomic idea'lar ro'yxati")],
+    requiredFields: [longTextField("atomic-ideas", "Atomic Ideas")],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({

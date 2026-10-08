@@ -259,6 +259,33 @@ test("a non-blocking step with no dependents is never flagged", () => {
   assert.deepEqual(validateWorkflowTemplate(template, TASK_TYPE_IDS).filter((e) => e.code === "INVALID_BLOCKING_CONFIG"), []);
 });
 
+test("V1 Sprint 2 severity correction: INVALID_BLOCKING_CONFIG is a WARNING, not an ERROR, and does not block isWorkflowTemplateValid", () => {
+  const template = templateWithSteps([baseStepInput({ taskTypeId: "tt-a", nameTemplate: "A", blocking: true })]);
+  const errors = validateWorkflowTemplate(template, TASK_TYPE_IDS);
+  const blockingConfigError = errors.find((e) => e.code === "INVALID_BLOCKING_CONFIG");
+  assert.equal(blockingConfigError.severity, "WARNING");
+  assert.equal(isWorkflowTemplateValid(template, TASK_TYPE_IDS), true, "a WARNING-only template must still be considered valid/saveable");
+});
+
+test("every other validation code remains severity ERROR and still blocks isWorkflowTemplateValid", () => {
+  let template = templateWithSteps([baseStepInput({ taskTypeId: "tt-missing", nameTemplate: "A" })]);
+  let errors = validateWorkflowTemplate(template, TASK_TYPE_IDS);
+  assert.equal(errors.find((e) => e.code === "MISSING_TASK_TYPE").severity, "ERROR");
+  assert.equal(isWorkflowTemplateValid(template, TASK_TYPE_IDS), false);
+
+  template = templateWithSteps([baseStepInput({ taskTypeId: "tt-a", nameTemplate: "A", dependsOn: ["unknown"] })]);
+  errors = validateWorkflowTemplate(template, TASK_TYPE_IDS);
+  assert.equal(errors.find((e) => e.code === "UNKNOWN_DEPENDENCY").severity, "ERROR");
+  assert.equal(isWorkflowTemplateValid(template, TASK_TYPE_IDS), false);
+});
+
+test("a template with both an ERROR and a WARNING is still invalid (the ERROR, not the WARNING, blocks saving)", () => {
+  const template = templateWithSteps([
+    baseStepInput({ taskTypeId: "tt-missing-type", nameTemplate: "A", blocking: true }),
+  ]);
+  assert.equal(isWorkflowTemplateValid(template, TASK_TYPE_IDS), false);
+});
+
 test("validateWorkflowTemplate never mutates its input template", () => {
   const template = templateWithSteps([baseStepInput({ taskTypeId: "tt-does-not-exist", nameTemplate: "A", dependsOn: ["x"] })]);
   const snapshot = JSON.stringify(template);

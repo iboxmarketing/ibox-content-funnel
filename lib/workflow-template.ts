@@ -154,18 +154,38 @@ export type WorkflowValidationErrorCode =
   | "DEPENDENCY_CYCLE"
   | "INVALID_BLOCKING_CONFIG";
 
+export type WorkflowValidationSeverity = "ERROR" | "WARNING";
+
+/** Every code is ERROR except INVALID_BLOCKING_CONFIG, which is advisory
+ * (V1 Sprint 2 correction): "blocking=true but nothing currently depends
+ * on it" is very often a legitimate forward-looking configuration (e.g. a
+ * step a future workflow revision will depend on), not a mistake. Saving
+ * must not be blocked by it alone. */
+const SEVERITY_BY_CODE: Record<WorkflowValidationErrorCode, WorkflowValidationSeverity> = {
+  MISSING_NAME: "ERROR",
+  MISSING_TASK_TYPE: "ERROR",
+  DUPLICATE_STEP_ID: "ERROR",
+  UNKNOWN_DEPENDENCY: "ERROR",
+  SELF_DEPENDENCY: "ERROR",
+  DEPENDENCY_CYCLE: "ERROR",
+  INVALID_BLOCKING_CONFIG: "WARNING",
+};
+
 export interface WorkflowValidationError {
   readonly code: WorkflowValidationErrorCode;
+  readonly severity: WorkflowValidationSeverity;
   readonly message: string;
   readonly stepId?: string;
 }
 
 /**
  * Pure. Never silently repairs a bad template -- always returns the full
- * list of problems found for the caller to act on.
+ * list of problems found for the caller to act on. Includes both ERROR and
+ * WARNING severity results; see `isWorkflowTemplateValid` for the
+ * save-blocking subset.
  */
 export function validateWorkflowTemplate(template: WorkflowTemplate, availableTaskTypeIds: ReadonlySet<string>): WorkflowValidationError[] {
-  const errors: WorkflowValidationError[] = [];
+  const errors: Array<Omit<WorkflowValidationError, "severity">> = [];
 
   if (!template.name.trim()) {
     errors.push({ code: "MISSING_NAME", message: "Workflow nomi kerak." });
@@ -210,11 +230,13 @@ export function validateWorkflowTemplate(template: WorkflowTemplate, availableTa
     }
   }
 
-  return errors;
+  return errors.map((error) => ({ ...error, severity: SEVERITY_BY_CODE[error.code] }));
 }
 
+/** Save-blocking validity: WARNING-severity results (currently just
+ * INVALID_BLOCKING_CONFIG) never block saving on their own. */
 export function isWorkflowTemplateValid(template: WorkflowTemplate, availableTaskTypeIds: ReadonlySet<string>): boolean {
-  return validateWorkflowTemplate(template, availableTaskTypeIds).length === 0;
+  return validateWorkflowTemplate(template, availableTaskTypeIds).every((error) => error.severity !== "ERROR");
 }
 
 /** DFS-based cycle detection over `dependsOn` edges restricted to known
