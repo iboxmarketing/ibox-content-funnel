@@ -12,11 +12,10 @@ for (const name of ["task-instance", "workflow-runtime"]) {
   writeFileSync(join(dir, `${name}.js`), ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 }
 const require = createRequire(import.meta.url);
-const { createTaskInstance, markTaskInstanceDone, skipTaskInstance } = require(join(dir, "task-instance.js"));
+const { createTaskInstance, skipTaskInstance } = require(join(dir, "task-instance.js"));
 const {
-  getEligibleNextSteps,
-  getImmediateNextStepsAfterSettlement,
   getStartableSteps,
+  getStepsGeneratedBy,
   buildTaskInstanceSeed,
   buildTransferCandidates,
   destinationFieldsForTaskType,
@@ -34,12 +33,23 @@ const TEMPLATE_ID = "wf-1";
 function step(overrides) {
   return { templateId: TEMPLATE_ID, taskTypeId: "tt-x", order: 0, overrides: undefined, ...overrides };
 }
-const blogStep = step({ id: "step-blog", nameTemplate: "Blog", dependsOn: [], blocking: true, skippable: false });
+const researchStep = step({ id: "step-research", nameTemplate: "Research", dependsOn: [], blocking: true, skippable: false });
+const blogStep = step({ id: "step-blog", nameTemplate: "Blog", dependsOn: ["step-research"], blocking: true, skippable: false });
 const headReviewStep = step({ id: "step-head-review", nameTemplate: "Head Review", dependsOn: ["step-blog"], blocking: true, skippable: false });
 const seoStep = step({ id: "step-seo", nameTemplate: "SEO", dependsOn: ["step-blog"], blocking: false, skippable: true });
 const angleStep = step({ id: "step-angle", nameTemplate: "Angle", dependsOn: ["step-blog"], blocking: false, skippable: true });
 const repurposeStep = step({ id: "step-repurpose", nameTemplate: "Repurpose Map", dependsOn: ["step-head-review"], blocking: false, skippable: true });
-const TEMPLATE = { id: TEMPLATE_ID, name: "Fixture", description: "", moduleType: "OTHER", version: 1, isActive: true, steps: [blogStep, headReviewStep, seoStep, angleStep, repurposeStep], createdAt: "", updatedAt: "" };
+const TEMPLATE = {
+  id: TEMPLATE_ID,
+  name: "Fixture",
+  description: "",
+  moduleType: "OTHER",
+  version: 1,
+  isActive: true,
+  steps: [researchStep, blogStep, headReviewStep, seoStep, angleStep, repurposeStep],
+  createdAt: "",
+  updatedAt: "",
+};
 
 function instanceFor(step_, overrides = {}) {
   return createTaskInstance({
@@ -57,61 +67,118 @@ function instanceFor(step_, overrides = {}) {
   }, fixedNow);
 }
 
+function settled(instance) {
+  return { ...instance, status: "DONE", outcome: "COMPLETED" };
+}
+
 test("getStartableSteps returns only dependency-free steps with no instance yet", () => {
-  assert.deepEqual(getStartableSteps(TEMPLATE, []).map((s) => s.id), ["step-blog"]);
-  const blogInstance = instanceFor(blogStep);
-  assert.deepEqual(getStartableSteps(TEMPLATE, [blogInstance]), []);
+  assert.deepEqual(getStartableSteps(TEMPLATE, []).map((s) => s.id), ["step-research"]);
+  const researchInstance = instanceFor(researchStep);
+  assert.deepEqual(getStartableSteps(TEMPLATE, [researchInstance]), []);
 });
 
-test("before Blog is done, none of its dependents are eligible", () => {
-  assert.deepEqual(getEligibleNextSteps(TEMPLATE, []).map((s) => s.id), ["step-blog"]);
+test("getStepsGeneratedBy returns [] for a sourceInstance with no workflowStepId", () => {
+  const instance = settled(instanceFor(researchStep, { workflowStepId: null }));
+  assert.deepEqual(getStepsGeneratedBy(TEMPLATE, [], instance), []);
+});
+
+// --- Multiplicity: one WorkflowStep, many TaskInstances ---
+
+test("one WorkflowStep (Blog) can have multiple TaskInstances, each with its own unique runtime identity", () => {
+  const research = settled(instanceFor(researchStep));
+  const blogA = instanceFor(blogStep, { sourceTaskId: research.id, title: "Blog A" });
+  const blogB = instanceFor(blogStep, { sourceTaskId: research.id, title: "Blog B" });
+  const blogC = instanceFor(blogStep, { sourceTaskId: research.id, title: "Blog C" });
+  assert.notEqual(blogA.id, blogB.id);
+  assert.notEqual(blogB.id, blogC.id);
+  const allSameStep = [blogA, blogB, blogC].every((b) => b.workflowStepId === "step-blog");
+  assert.ok(allSameStep);
+});
+
+test("Research completion generates the Blog step as a candidate, independent of how many Blog instances already exist for it", () => {
+  const research = settled(instanceFor(researchStep));
+  const existingBlog = instanceFor(blogStep, { sourceTaskId: research.id });
+  // Even though a Blog instance already exists from this same Research,
+  // getStepsGeneratedBy must still report Blog as a generatable step --
+  // Sprint 2's "already has an instance -> never again" rule does not
+  // apply once multiple occurrences are expected.
+  const generated = getStepsGeneratedBy(TEMPLATE, [existingBlog], research).map((s) => s.id);
+  assert.deepEqual(generated, ["step-blog"]);
+});
+
+test("a downstream task depends on the SPECIFIC source TaskInstance that generated it, not merely on the WorkflowStep", () => {
+  const research1 = settled(instanceFor(researchStep, { title: "Research 1" }));
+  const research2 = settled(instanceFor(researchStep, { title: "Research 2" }));
+  const blogFromResearch2 = instanceFor(blogStep, { sourceTaskId: research2.id, title: "Blog from R2" });
+
+  // A Reel generated "from Blog" must resolve relative to blogFromResearch2
+  // specifically -- getStepsGeneratedBy(template, allInstances, blogFromResearch2settled)
+  // must only ever consider blogFromResearch2's own lineage (research2),
+  // never research1, regardless of research1's settlement state.
+  const settledBlog = settled(blogFromResearch2);
+  const allInstances = [research1, research2, settledBlog];
+  const headReview = getStepsGeneratedBy(TEMPLATE, allInstances, settledBlog).find((s) => s.id === "step-head-review");
+  assert.ok(headReview, "Head Review must be generated from this specific settled Blog");
+});
+
+test("an unrelated instance/chain never blocks or affects another chain's eligibility", () => {
+  // Chain A: research settled, blog NOT settled yet.
+  const researchA = settled(instanceFor(researchStep, { title: "Research A" }));
+  const blogA = instanceFor(blogStep, { sourceTaskId: researchA.id, title: "Blog A" }); // not settled
+
+  // Chain B: a completely separate Research+Blog+HeadReview chain, fully settled.
+  const researchB = settled(instanceFor(researchStep, { title: "Research B" }));
+  const blogB = settled(instanceFor(blogStep, { sourceTaskId: researchB.id, title: "Blog B" }));
+
+  const allInstances = [researchA, blogA, researchB, blogB];
+  // Chain A's Blog is not settled, so nothing downstream of IT should be
+  // generated by blogA regardless of chain B's state.
+  const generatedFromBlogA = getStepsGeneratedBy(TEMPLATE, allInstances, settled(blogA)).map((s) => s.id).sort();
+  assert.deepEqual(generatedFromBlogA, ["step-angle", "step-head-review", "step-seo"]);
+  // And chain B's settlement must not have produced a phantom dependency
+  // satisfaction for research A's lineage.
+  const generatedFromResearchA = getStepsGeneratedBy(TEMPLATE, allInstances, researchA).map((s) => s.id);
+  assert.deepEqual(generatedFromResearchA, ["step-blog"]);
 });
 
 test("once Blog is DONE, Head Review / SEO / Angle all become eligible in parallel -- Repurpose does not", () => {
-  const blogInstance = markTaskInstanceDone(instanceFor(blogStep), fixedNow);
-  const eligible = getEligibleNextSteps(TEMPLATE, [blogInstance]).map((s) => s.id).sort();
-  assert.deepEqual(eligible, ["step-angle", "step-head-review", "step-seo"]);
+  const research = settled(instanceFor(researchStep));
+  const blogInstance = settled(instanceFor(blogStep, { sourceTaskId: research.id }));
+  const generated = getStepsGeneratedBy(TEMPLATE, [research, blogInstance], blogInstance).map((s) => s.id).sort();
+  assert.deepEqual(generated, ["step-angle", "step-head-review", "step-seo"]);
 });
 
-test("getImmediateNextStepsAfterSettlement scopes to only the steps that depend on the just-settled step", () => {
-  const blogInstance = markTaskInstanceDone(instanceFor(blogStep), fixedNow);
-  const immediate = getImmediateNextStepsAfterSettlement(TEMPLATE, [blogInstance], "step-blog").map((s) => s.id).sort();
-  assert.deepEqual(immediate, ["step-angle", "step-head-review", "step-seo"]);
+test("Repurpose Map stays ineligible until Head Review is settled in the SAME lineage, independent of SEO/Angle", () => {
+  const research = settled(instanceFor(researchStep));
+  const blogInstance = settled(instanceFor(blogStep, { sourceTaskId: research.id }));
+  const seoInstance = settled(instanceFor(seoStep, { sourceTaskId: blogInstance.id }));
+  const angleInstance = settled(instanceFor(angleStep, { sourceTaskId: blogInstance.id }));
+  const allInstances = [research, blogInstance, seoInstance, angleInstance];
+  const generatedFromBlog = getStepsGeneratedBy(TEMPLATE, allInstances, blogInstance).map((s) => s.id);
+  assert.ok(!generatedFromBlog.includes("step-repurpose"));
 });
 
-test("Repurpose Map stays ineligible until Head Review is settled, independent of SEO/Angle", () => {
-  const blogInstance = markTaskInstanceDone(instanceFor(blogStep), fixedNow);
-  const seoInstance = markTaskInstanceDone(instanceFor(seoStep), fixedNow);
-  const angleInstance = markTaskInstanceDone(instanceFor(angleStep), fixedNow);
-  const eligible = getEligibleNextSteps(TEMPLATE, [blogInstance, seoInstance, angleInstance]).map((s) => s.id);
-  assert.ok(!eligible.includes("step-repurpose"), "SEO/Angle completion must not unlock Repurpose");
-  assert.ok(eligible.includes("step-head-review"), "Head Review is still outstanding and must remain eligible");
-});
-
-test("Repurpose Map becomes eligible once Head Review is DONE", () => {
-  const blogInstance = markTaskInstanceDone(instanceFor(blogStep), fixedNow);
-  const headReviewInstance = markTaskInstanceDone(instanceFor(headReviewStep), fixedNow);
-  const immediate = getImmediateNextStepsAfterSettlement(TEMPLATE, [blogInstance, headReviewInstance], "step-head-review").map((s) => s.id);
-  assert.deepEqual(immediate, ["step-repurpose"]);
+test("Repurpose Map becomes eligible once Head Review (in the same lineage) is DONE", () => {
+  const research = settled(instanceFor(researchStep));
+  const blogInstance = settled(instanceFor(blogStep, { sourceTaskId: research.id }));
+  const headReviewInstance = settled(instanceFor(headReviewStep, { sourceTaskId: blogInstance.id }));
+  const allInstances = [research, blogInstance, headReviewInstance];
+  const generated = getStepsGeneratedBy(TEMPLATE, allInstances, headReviewInstance).map((s) => s.id);
+  assert.deepEqual(generated, ["step-repurpose"]);
 });
 
 test("a SKIPPED dependency satisfies a blocking dependent exactly like DONE does", () => {
-  const blogInstance = skipTaskInstance(instanceFor(blogStep), "Blog not needed this time", fixedNow);
-  const eligible = getEligibleNextSteps(TEMPLATE, [blogInstance]).map((s) => s.id).sort();
-  assert.deepEqual(eligible, ["step-angle", "step-head-review", "step-seo"]);
+  const research = settled(instanceFor(researchStep));
+  const blogInstance = skipTaskInstance(instanceFor(blogStep, { sourceTaskId: research.id }), "Not needed", fixedNow);
+  const generated = getStepsGeneratedBy(TEMPLATE, [research, blogInstance], blogInstance).map((s) => s.id).sort();
+  assert.deepEqual(generated, ["step-angle", "step-head-review", "step-seo"]);
 });
 
-test("a step that already has an instance (any status) is never re-surfaced as eligible", () => {
-  const blogInstance = markTaskInstanceDone(instanceFor(blogStep), fixedNow);
-  const headReviewInstance = instanceFor(headReviewStep); // ASSIGNED, not yet settled
-  const eligible = getEligibleNextSteps(TEMPLATE, [blogInstance, headReviewInstance]).map((s) => s.id).sort();
-  assert.deepEqual(eligible, ["step-angle", "step-seo"]);
-});
-
-test("getEligibleNextSteps never surfaces anything beyond one hop (no pre-created future graph)", () => {
-  const eligible = getEligibleNextSteps(TEMPLATE, []).map((s) => s.id);
-  assert.deepEqual(eligible, ["step-blog"]);
-  assert.ok(!eligible.includes("step-repurpose"));
+test("getStepsGeneratedBy never surfaces anything beyond one hop", () => {
+  const research = settled(instanceFor(researchStep));
+  const generated = getStepsGeneratedBy(TEMPLATE, [research], research).map((s) => s.id);
+  assert.deepEqual(generated, ["step-blog"]);
+  assert.ok(!generated.includes("step-repurpose"));
 });
 
 // --- seed / context transfer ---
@@ -135,6 +202,16 @@ test("buildTaskInstanceSeed leaves deadline null and uses a FIXED_ROLE as a plac
   assert.equal(seed.assignee, "SEO");
   assert.equal(seed.sourceTaskId, "ti-source");
   assert.equal(seed.title, "SEO");
+  assert.equal(seed.contentRef, null);
+  assert.deepEqual(seed.relatedEntityRefs, []);
+});
+
+test("buildTaskInstanceSeed accepts an explicit contentRef and relatedEntityRefs", () => {
+  const contentRef = { entityType: "KNOWLEDGE_NODE", entityId: "node-1" };
+  const related = [{ entityType: "KNOWLEDGE_NODE", entityId: "node-2" }];
+  const seed = buildTaskInstanceSeed(blogStep, BLOG_TASK_TYPE, "ti-source", contentRef, related);
+  assert.deepEqual(seed.contentRef, contentRef);
+  assert.deepEqual(seed.relatedEntityRefs, related);
 });
 
 test("buildTaskInstanceSeed assignee is null for DEFAULT_CONTENT_OWNER/MANUAL -- no real assignee lookup happens", () => {
@@ -143,7 +220,7 @@ test("buildTaskInstanceSeed assignee is null for DEFAULT_CONTENT_OWNER/MANUAL --
 });
 
 test("buildTransferCandidates only includes fields with a non-empty value, never a generic blob", () => {
-  let blogInstance = instanceFor(blogStep, {
+  const blogInstance = instanceFor(blogStep, {
     taskTypeId: "tt-blog",
     fieldValues: { "blog-link": "https://example.com/post", "blog-title": "" },
   });

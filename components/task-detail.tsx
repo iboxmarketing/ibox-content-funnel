@@ -20,6 +20,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { useContentOsStore } from "@/components/content-os-store-provider";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
+import { useContentEntityStore } from "@/components/content-entity-store-provider";
+import { labelForRef } from "@/lib/content-entity-store";
+import { entityTypeLabelUz } from "@/lib/content-workflow";
 import {
   canCompleteTaskInstance,
   provenanceForField,
@@ -203,6 +206,7 @@ export function TaskDetail({
 }) {
   const { state: contentOsState } = useContentOsStore();
   const { state: runtimeState, setStatus, addCustomField, removeCustomField, addLink, removeLink, skip, addSuggestion } = useTaskRuntimeStore();
+  const { state: contentEntityState } = useContentEntityStore();
   const [skipReason, setSkipReason] = useState("");
   const [skipping, setSkipping] = useState(false);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
@@ -221,6 +225,11 @@ export function TaskDetail({
   const completionErrors = useMemo(() => (instance ? validateTaskInstanceForCompletion(instance, requiredFields) : []), [instance, requiredFields]);
   const errorByFieldId = useMemo(() => new Map(completionErrors.filter((e) => e.fieldId).map((e) => [e.fieldId as string, e.message])), [completionErrors]);
   const canComplete = instance ? canCompleteTaskInstance(instance, requiredFields) : false;
+  const workingOnLabel = useMemo(() => {
+    if (!instance?.contentRef) return null;
+    const name = labelForRef(contentEntityState, instance.contentRef);
+    return name ? `${entityTypeLabelUz(instance.contentRef.entityType)}: ${name}` : null;
+  }, [instance, contentEntityState]);
 
   if (!instance || !taskType) {
     return <div className="flex h-full items-center justify-center text-sm text-slate-400">Task topilmadi.</div>;
@@ -247,6 +256,13 @@ export function TaskDetail({
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
         <div className="mx-auto max-w-2xl space-y-5">
+          {workingOnLabel && (
+            <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <p className="text-[10px] font-bold uppercase tracking-[.06em] text-slate-400">Working on</p>
+              <p className="text-sm font-semibold text-slate-900">{workingOnLabel}</p>
+            </div>
+          )}
+
           {sourceInstance && (
             <button type="button" onClick={() => onOpenInstance(sourceInstance.id)} className="text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline">
               ← Manba task: {sourceInstance.title}

@@ -1,5 +1,5 @@
 /**
- * Local Task Instance runtime model (V1 Sprint 2).
+ * Local Task Instance runtime model (V1 Sprint 2, extended Sprint 3).
  *
  * Explicit boundary: a TaskInstance is a SESSION-ONLY local object. It is
  * NOT a row in marketing-team-task-bot's task backend and nothing here
@@ -20,6 +20,7 @@
  */
 import type { FieldDefinition, FieldType } from "./task-type";
 import type { TaskLink } from "./task-link";
+import type { ContentEntityRef } from "./content-entity";
 
 export const TASK_INSTANCE_STATUSES = ["ASSIGNED", "IN_PROGRESS", "BLOCKED", "REVIEW", "REVISION", "DONE", "CANCELLED"] as const;
 export type TaskInstanceStatus = (typeof TASK_INSTANCE_STATUSES)[number];
@@ -66,6 +67,17 @@ export interface TaskInstance {
   readonly customFields: readonly FieldDefinition[];
   readonly links: readonly TaskLink[];
   readonly sourceTaskId: string | null;
+  /** Section 7: a typed pointer to the one Content OS entity this task
+   * primarily operates on (e.g. a Blog task's KnowledgeNode). This is the
+   * local stand-in for the future `content_task_links` bridge -- never a
+   * DB table this sprint, and never `tasks.content_ref`. */
+  readonly contentRef: ContentEntityRef | null;
+  /** Narrow, justified exception to "one primary ref": a Research task can
+   * cover several KnowledgeNodes sharing one research artifact (section
+   * 10/11.1) -- the preview that follows Research needs to know all of
+   * them, not just one. Every other Task Type leaves this empty and uses
+   * `contentRef` alone. */
+  readonly relatedEntityRefs: readonly ContentEntityRef[];
   readonly skipReason: string | null;
   /** null while still open; set exactly once, when the instance leaves
    * ASSIGNED/IN_PROGRESS/BLOCKED/REVIEW/REVISION via Complete or Skip. */
@@ -77,11 +89,16 @@ export interface TaskInstance {
 
 /** `fieldProvenance` is optional and only meaningful at creation time for a
  * Context Transfer result (section 11/12) -- it defaults to empty, never
- * guessed or back-filled later. */
+ * guessed or back-filled later. `contentRef`/`relatedEntityRefs` default to
+ * null/empty for any task not yet wired to the content entity model. */
 export type TaskInstanceDraft = Omit<
   TaskInstance,
-  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt"
-> & { readonly fieldProvenance?: readonly FieldProvenance[] };
+  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt" | "contentRef" | "relatedEntityRefs"
+> & {
+  readonly fieldProvenance?: readonly FieldProvenance[];
+  readonly contentRef?: ContentEntityRef | null;
+  readonly relatedEntityRefs?: readonly ContentEntityRef[];
+};
 
 function stableInstanceId(now: () => string): string {
   return `ti-${now().replace(/[^0-9]/g, "")}-${Math.random().toString(36).slice(2, 7)}`;
@@ -92,6 +109,8 @@ export function createTaskInstance(draft: TaskInstanceDraft, now: () => string =
   return {
     ...draft,
     fieldProvenance: draft.fieldProvenance ?? [],
+    contentRef: draft.contentRef ?? null,
+    relatedEntityRefs: draft.relatedEntityRefs ?? [],
     id: stableInstanceId(now),
     status: "ASSIGNED",
     outcome: null,

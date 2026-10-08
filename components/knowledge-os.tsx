@@ -28,6 +28,7 @@ import { KnowledgeCanvas } from "@/components/knowledge-canvas";
 import { KnowledgeDrawer } from "@/components/knowledge-drawer";
 import { ContentOsStoreProvider } from "@/components/content-os-store-provider";
 import { TaskRuntimeStoreProvider } from "@/components/task-runtime-store-provider";
+import { ContentEntityStoreProvider } from "@/components/content-entity-store-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,7 +85,7 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun";
+type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun" | "contentTree";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
@@ -99,6 +100,7 @@ const ProductionSettings = dynamic(() => import("@/components/production-setting
 const TaskTypeLibrary = dynamic(() => import("@/components/task-type-library").then((module) => module.TaskTypeLibrary), { ssr: false });
 const WorkflowTemplateBuilder = dynamic(() => import("@/components/workflow-template-builder").then((module) => module.WorkflowTemplateBuilder), { ssr: false });
 const WorkflowRunView = dynamic(() => import("@/components/workflow-run-view").then((module) => module.WorkflowRunView), { ssr: false });
+const ContentTreeView = dynamic(() => import("@/components/content-tree-view").then((module) => module.ContentTreeView), { ssr: false });
 
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
   { id: "mindmap", label: "Mind Map", icon: Network },
@@ -108,11 +110,11 @@ const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }>
   { id: "taskTypes", label: "Task Type Library", icon: ListChecks },
   { id: "workflows", label: "Workflow Builder", icon: GitBranch },
   { id: "workflowRun", label: "Workflow Run", icon: PlaySquare },
+  { id: "contentTree", label: "Content Tree", icon: FileStack },
   { id: "settings", label: "Sozlamalar", icon: Settings2 },
 ];
 
 const FUTURE_VIEWS = [
-  { label: "Content Nodes", icon: FileStack },
   { label: "Tools", icon: Wrench },
   { label: "Customer Journey / MOF", icon: GitBranch },
   { label: "Dashboard", icon: LayoutDashboard },
@@ -353,11 +355,11 @@ export function KnowledgeOS() {
   }, [loadData]);
 
   useEffect(() => {
-    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun") return;
+    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun" || activeView === "contentTree") return;
     // Load production data only when an operational view is opened. Task
-    // Type Library / Workflow Builder / Workflow Run are local/session-only
-    // config + runtime tools (V1 Sprint 1-2) and never need Sheet-backed
-    // production data.
+    // Type Library / Workflow Builder / Workflow Run / Content Tree are
+    // local/session-only config + runtime tools (V1 Sprint 1-3) and never
+    // need Sheet-backed production data.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadProduction();
     const interval = window.setInterval(() => void loadProduction(), 60_000);
@@ -508,6 +510,7 @@ export function KnowledgeOS() {
 
   return (
     <ContentOsStoreProvider>
+    <ContentEntityStoreProvider>
     <TaskRuntimeStoreProvider>
     <SidebarProvider defaultOpen style={{ "--sidebar-width": "232px", "--sidebar-width-icon": "68px" } as React.CSSProperties}>
       <Sidebar collapsible="icon" className="border-r border-[#173663] bg-[#071B3B] text-white">
@@ -624,6 +627,11 @@ export function KnowledgeOS() {
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
             <WorkflowRunView />
           </div>
+        ) : activeView === "contentTree" ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <ContentTreeView />
+          </div>
         ) : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
           <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
@@ -646,6 +654,7 @@ export function KnowledgeOS() {
       </SidebarInset>
     </SidebarProvider>
     </TaskRuntimeStoreProvider>
+    </ContentEntityStoreProvider>
     </ContentOsStoreProvider>
   );
 }

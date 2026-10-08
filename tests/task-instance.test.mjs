@@ -64,6 +64,20 @@ test("createTaskInstance starts ASSIGNED with no outcome", () => {
   assert.deepEqual(instance.fieldProvenance, []);
 });
 
+test("createTaskInstance defaults contentRef to null and relatedEntityRefs to empty when not provided", () => {
+  const instance = createTaskInstance(baseDraft(), fixedNow);
+  assert.equal(instance.contentRef, null);
+  assert.deepEqual(instance.relatedEntityRefs, []);
+});
+
+test("createTaskInstance honors an explicit contentRef and relatedEntityRefs (section 7's task<->entity relation)", () => {
+  const contentRef = { entityType: "KNOWLEDGE_NODE", entityId: "node-1" };
+  const related = [{ entityType: "KNOWLEDGE_NODE", entityId: "node-2" }];
+  const instance = createTaskInstance(baseDraft({ contentRef, relatedEntityRefs: related }), fixedNow);
+  assert.deepEqual(instance.contentRef, contentRef);
+  assert.deepEqual(instance.relatedEntityRefs, related);
+});
+
 test("createTaskInstance honors an initial fieldProvenance (the Context Transfer result), but never invents one", () => {
   const provenance = [{ fieldId: "seo-notes", sourceTaskId: "ti-source", sourceFieldId: "blog-link" }];
   const instance = createTaskInstance(baseDraft({ fieldProvenance: provenance }), fixedNow);

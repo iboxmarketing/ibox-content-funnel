@@ -1,12 +1,14 @@
 "use client";
 
 /**
- * Workflow Run / Task Runtime (V1 Sprint 2): the local view that actually
- * runs a configured WorkflowTemplate. "Start workflow" creates the
+ * Workflow Run / Task Runtime (V1 Sprint 2, extended Sprint 3 for
+ * multiplicity + content entities). "Start workflow" creates the
  * dependency-free root step(s) directly (there is no source task to
- * preview from yet); every later step is created only through
- * Complete -> Generated Task Preview -> Confirm. Still local/session only
- * -- nothing here calls TaskClient.create() or Supabase.
+ * preview from yet); every later task is created only through
+ * Complete -> Generated Preview -> Confirm, which may now create several
+ * TaskInstances of the same WorkflowStep plus the content entities they
+ * operate on (ProblemPart / KnowledgeNode / Blog). Still local/session
+ * only -- nothing here calls TaskClient.create() or Supabase.
  */
 import { useMemo, useState } from "react";
 import { CheckCircle2, ListTodo, Play, ShieldCheck } from "lucide-react";
@@ -14,21 +16,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useContentOsStore } from "@/components/content-os-store-provider";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
+import { useContentEntityStore } from "@/components/content-entity-store-provider";
 import { TaskDetail } from "@/components/task-detail";
 import { GeneratedTaskPreview } from "@/components/generated-task-preview";
-import {
-  buildTaskInstanceSeed,
-  getImmediateNextStepsAfterSettlement,
-  getStartableSteps,
-} from "@/lib/workflow-runtime";
-import type { TaskInstance, TaskInstanceDraft } from "@/lib/task-instance";
-import type { WorkflowStep } from "@/lib/workflow-template";
-
-interface PendingPreview {
-  readonly sourceInstance: TaskInstance;
-  readonly sourceTaskTypeId: string;
-  readonly steps: readonly WorkflowStep[];
-}
+import { buildTaskInstanceSeed, getStartableSteps } from "@/lib/workflow-runtime";
+import { buildPreviewPlan, confirmPreviewPlan, type CandidateSelectionState, type PreviewPlan } from "@/lib/content-workflow";
+import { ref } from "@/lib/content-entity";
+import type { TaskInstance } from "@/lib/task-instance";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   DONE: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -38,9 +32,10 @@ const STATUS_BADGE_CLASS: Record<string, string> = {
 export function WorkflowRunView() {
   const { state: contentOsState } = useContentOsStore();
   const { state: runtimeState, createInstances, complete } = useTaskRuntimeStore();
+  const contentEntityStore = useContentEntityStore();
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(contentOsState.workflowTemplates[0]?.id ?? null);
   const [openInstanceId, setOpenInstanceId] = useState<string | null>(null);
-  const [pendingPreview, setPendingPreview] = useState<PendingPreview | null>(null);
+  const [pendingPlan, setPendingPlan] = useState<PreviewPlan | null>(null);
 
   const taskTypesById = useMemo(() => new Map(contentOsState.taskTypes.map((t) => [t.id, t])), [contentOsState.taskTypes]);
   const template = contentOsState.workflowTemplates.find((t) => t.id === selectedTemplateId) ?? null;
@@ -54,10 +49,15 @@ export function WorkflowRunView() {
 
   function startWorkflow() {
     if (!template) return;
-    const drafts: TaskInstanceDraft[] = startableSteps.flatMap((step) => {
+    const drafts = startableSteps.flatMap((step) => {
       const taskType = taskTypesById.get(step.taskTypeId);
       if (!taskType) return [];
-      return [buildTaskInstanceSeed(step, taskType, null)];
+      // Demo-fixture wiring: a freshly-started "Problem Split" works on
+      // the one seeded Problem Category (section 14's own example).
+      const contentRef = taskType.name === "Problem Split" && contentEntityStore.state.problemCategories[0]
+        ? ref("PROBLEM_CATEGORY", contentEntityStore.state.problemCategories[0].id)
+        : null;
+      return [buildTaskInstanceSeed(step, taskType, null, contentRef)];
     });
     if (!drafts.length) return;
     const created = createInstances(drafts);
@@ -66,46 +66,47 @@ export function WorkflowRunView() {
 
   function handleRequestComplete(instance: TaskInstance) {
     const instanceTemplate = instance.workflowTemplateId ? contentOsState.workflowTemplates.find((t) => t.id === instance.workflowTemplateId) ?? null : null;
-    if (!instanceTemplate || !instance.workflowStepId) {
+    const sourceTaskType = taskTypesById.get(instance.taskTypeId) ?? null;
+    if (!instanceTemplate || !instance.workflowStepId || !sourceTaskType) {
       complete(instance.id);
       setOpenInstanceId(null);
       return;
     }
-    const simulatedSettled = [
-      ...runtimeState.instances.filter((item) => item.id !== instance.id),
-      { ...instance, status: "DONE" as const, outcome: "COMPLETED" as const },
-    ];
-    const nextSteps = getImmediateNextStepsAfterSettlement(instanceTemplate, simulatedSettled, instance.workflowStepId);
-    if (!nextSteps.length) {
+    const settledSourceInstance: TaskInstance = { ...instance, status: "DONE", outcome: "COMPLETED" };
+    const plan = buildPreviewPlan({
+      template: instanceTemplate,
+      allInstances: runtimeState.instances,
+      settledSourceInstance,
+      sourceTaskType,
+      taskTypesById,
+      contentEntities: contentEntityStore.state,
+    });
+    if (!plan) {
       complete(instance.id);
       setOpenInstanceId(null);
       return;
     }
-    setPendingPreview({ sourceInstance: instance, sourceTaskTypeId: instance.taskTypeId, steps: nextSteps });
+    setPendingPlan(plan);
   }
 
-  function handlePreviewConfirm(drafts: readonly TaskInstanceDraft[]) {
-    if (!pendingPreview) return;
-    const created = createInstances(drafts);
-    complete(pendingPreview.sourceInstance.id);
-    setPendingPreview(null);
-    setOpenInstanceId(created[0]?.id ?? pendingPreview.sourceInstance.id);
+  function handlePreviewConfirm(selections: readonly CandidateSelectionState[]) {
+    if (!pendingPlan) return;
+    const outcome = confirmPreviewPlan(pendingPlan, selections);
+    contentEntityStore.addProblemParts(outcome.problemParts);
+    contentEntityStore.addKnowledgeNodes(outcome.knowledgeNodes);
+    contentEntityStore.addBlogs(outcome.blogs);
+    for (const update of outcome.knowledgeNodeStatusUpdates) contentEntityStore.setKnowledgeNodeStatus(update.id, update.status);
+    const created = createInstances(outcome.taskDrafts);
+    complete(pendingPlan.sourceInstance.id);
+    setPendingPlan(null);
+    setOpenInstanceId(created[0]?.id ?? pendingPlan.sourceInstance.id);
   }
 
   if (openInstanceId) {
     return (
       <>
         <TaskDetail instanceId={openInstanceId} onClose={() => setOpenInstanceId(null)} onComplete={handleRequestComplete} onOpenInstance={setOpenInstanceId} />
-        {pendingPreview && (
-          <GeneratedTaskPreview
-            sourceInstance={pendingPreview.sourceInstance}
-            sourceTaskType={taskTypesById.get(pendingPreview.sourceTaskTypeId)!}
-            steps={pendingPreview.steps}
-            taskTypesById={taskTypesById}
-            onCancel={() => setPendingPreview(null)}
-            onConfirm={handlePreviewConfirm}
-          />
-        )}
+        {pendingPlan && <GeneratedTaskPreview plan={pendingPlan} onCancel={() => setPendingPlan(null)} onConfirm={handlePreviewConfirm} />}
       </>
     );
   }
