@@ -30,6 +30,7 @@ import { KnowledgeDrawer } from "@/components/knowledge-drawer";
 import { ContentOsStoreProvider } from "@/components/content-os-store-provider";
 import { TaskRuntimeStoreProvider } from "@/components/task-runtime-store-provider";
 import { ContentEntityStoreProvider } from "@/components/content-entity-store-provider";
+import { LocalPrototypeBanner } from "@/components/local-prototype-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -616,29 +617,34 @@ export function KnowledgeOS() {
         ) : catalogError ? (
           <div className="flex h-full items-center justify-center bg-slate-50"><div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Catalog preview yuklanmadi</h2><p className="mt-2 text-sm text-slate-500">{catalogError}</p><Button className="mt-4" onClick={() => void loadCatalog(true)}>Qayta urinish</Button></div></div>
         ) : <LoadingState /> : activeView === "taskTypes" ? (
-          <div className="relative h-full min-h-0">
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            <TaskTypeLibrary />
+            <LocalPrototypeBanner />
+            <div className="min-h-0 flex-1"><TaskTypeLibrary /></div>
           </div>
         ) : activeView === "workflows" ? (
-          <div className="relative h-full min-h-0">
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            <WorkflowTemplateBuilder />
+            <LocalPrototypeBanner />
+            <div className="min-h-0 flex-1"><WorkflowTemplateBuilder /></div>
           </div>
         ) : activeView === "workflowRun" ? (
-          <div className="relative h-full min-h-0">
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            <WorkflowRunView />
+            <LocalPrototypeBanner />
+            <div className="min-h-0 flex-1"><WorkflowRunView /></div>
           </div>
         ) : activeView === "production" ? (
-          <div className="relative h-full min-h-0">
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            <MaterialProductionView />
+            <LocalPrototypeBanner />
+            <div className="min-h-0 flex-1"><MaterialProductionView /></div>
           </div>
         ) : activeView === "contentTree" ? (
-          <div className="relative h-full min-h-0">
+          <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
-            <ContentTreeView />
+            <LocalPrototypeBanner />
+            <div className="min-h-0 flex-1"><ContentTreeView /></div>
           </div>
         ) : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
           <div className="relative flex h-full min-h-0 flex-col">

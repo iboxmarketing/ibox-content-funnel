@@ -91,6 +91,39 @@ export interface TextPreviewCandidate {
   readonly kind: "PROBLEM_SPLIT_TO_PARTS" | "KNOWLEDGE_DISCOVERY_TO_NODES";
   readonly key: string;
   readonly text: string;
+  /** Sprint 7: an EXISTING ProblemPart / KnowledgeNode under the same
+   * parent with the same (normalized) name -- confirming SELECTS it
+   * instead of creating a duplicate entity. */
+  readonly existingEntityId?: string | null;
+  /** Existing entities the employee did not mention are offered too, but
+   * start excluded. */
+  readonly defaultIncluded?: boolean;
+}
+
+/** Name equality for "is this the same part/node?": case, whitespace and
+ * the many Uzbek apostrophe variants (' ‘ ’ ʻ ʼ `) are ignored. */
+export function normalizeEntityName(name: string): string {
+  return name.toLowerCase().replace(/[‘’ʻʼ`´]/g, "'").replace(/\s+/g, " ").trim();
+}
+
+function textCandidatesWithExisting<E extends { readonly id: string; readonly name: string }>(
+  kind: TextPreviewCandidate["kind"],
+  keyPrefix: string,
+  lines: readonly string[],
+  existing: readonly E[],
+  offerUnmentioned: (entity: E) => boolean,
+): TextPreviewCandidate[] {
+  const byName = new Map(existing.map((e) => [normalizeEntityName(e.name), e]));
+  const used = new Set<string>();
+  const fromLines = lines.map((text, index) => {
+    const match = byName.get(normalizeEntityName(text));
+    if (match) used.add(match.id);
+    return { kind, key: `${keyPrefix}-${index}`, text: match ? match.name : text, existingEntityId: match?.id ?? null };
+  });
+  const unmentioned = existing
+    .filter((e) => !used.has(e.id) && offerUnmentioned(e))
+    .map((e) => ({ kind, key: `${keyPrefix}-existing-${e.id}`, text: e.name, existingEntityId: e.id, defaultIncluded: false }));
+  return [...fromLines, ...unmentioned];
 }
 
 export interface ResearchPreviewCandidate {
@@ -230,14 +263,21 @@ export function buildPreviewPlan(input: BuildPreviewPlanInput): PreviewPlan | nu
   if (input.sourceTaskType.name === "Problem Split" && firstTargetTaskType) {
     const lines = splitCandidateLines(input.settledSourceInstance.fieldValues["components"]);
     if (!lines.length) return null;
-    const candidates: PreviewCandidate[] = lines.map((text, index) => ({ kind: "PROBLEM_SPLIT_TO_PARTS", key: `part-${index}`, text }));
+    const categoryId = input.settledSourceInstance.contentRef?.entityType === "PROBLEM_CATEGORY" ? input.settledSourceInstance.contentRef.entityId : null;
+    const existingParts = input.contentEntities.problemParts.filter((p) => p.problemCategoryId === categoryId);
+    // An existing part that already has its own (non-cancelled) Knowledge
+    // Discovery task is not offered again.
+    const hasTask = (partId: string) => input.allInstances.some((i) => i.taskTypeId === firstTargetTaskType.id && i.status !== "CANCELLED" && i.contentRef?.entityType === "PROBLEM_PART" && i.contentRef.entityId === partId);
+    const candidates: PreviewCandidate[] = textCandidatesWithExisting("PROBLEM_SPLIT_TO_PARTS", "part", lines, existingParts, (p) => !hasTask(p.id));
     return { mode: "PROBLEM_SPLIT_TO_PARTS", sourceInstance: input.settledSourceInstance, sourceTaskType: input.sourceTaskType, targetStep: firstTarget, targetTaskType: firstTargetTaskType, candidates };
   }
 
   if (input.sourceTaskType.name === "Knowledge Discovery" && firstTargetTaskType) {
     const lines = splitCandidateLines(input.settledSourceInstance.fieldValues["knowledge-nodes"]);
     if (!lines.length) return null;
-    const candidates: PreviewCandidate[] = lines.map((text, index) => ({ kind: "KNOWLEDGE_DISCOVERY_TO_NODES", key: `node-${index}`, text }));
+    const partId = input.settledSourceInstance.contentRef?.entityType === "PROBLEM_PART" ? input.settledSourceInstance.contentRef.entityId : null;
+    const existingNodes = input.contentEntities.knowledgeNodes.filter((n) => n.problemPartId === partId);
+    const candidates: PreviewCandidate[] = textCandidatesWithExisting("KNOWLEDGE_DISCOVERY_TO_NODES", "node", lines, existingNodes, (n) => n.status === "UNPLANNED");
     return { mode: "KNOWLEDGE_DISCOVERY_TO_NODES", sourceInstance: input.settledSourceInstance, sourceTaskType: input.sourceTaskType, targetStep: firstTarget, targetTaskType: firstTargetTaskType, candidates };
   }
 
@@ -401,9 +441,13 @@ function confirmProblemSplit(plan: PreviewPlan, selectionByKey: ReadonlyMap<stri
   for (const candidate of plan.candidates as readonly TextPreviewCandidate[]) {
     const selection = selectionByKey.get(candidate.key);
     if (!selection) continue;
-    const part = createProblemPart(problemCategoryRef.entityId, selection.title.trim() || candidate.text, plan.sourceInstance.id, now);
-    problemParts.push(part);
-    const seed = buildTaskInstanceSeed(plan.targetStep, plan.targetTaskType, plan.sourceInstance.id, ref("PROBLEM_PART", part.id));
+    let partId = candidate.existingEntityId ?? null;
+    if (!partId) {
+      const part = createProblemPart(problemCategoryRef.entityId, selection.title.trim() || candidate.text, plan.sourceInstance.id, now);
+      problemParts.push(part);
+      partId = part.id;
+    }
+    const seed = buildTaskInstanceSeed(plan.targetStep, plan.targetTaskType, plan.sourceInstance.id, ref("PROBLEM_PART", partId));
     taskDrafts.push({ ...seed, assignee: selection.assignee.trim() || null, deadline: selection.deadline || null });
   }
   return { ...EMPTY_OUTCOME, problemParts, taskDrafts };
@@ -415,12 +459,16 @@ function confirmKnowledgeDiscovery(plan: PreviewPlan, selectionByKey: ReadonlyMa
   if (!problemPartRef || problemPartRef.entityType !== "PROBLEM_PART") return EMPTY_OUTCOME;
 
   const knowledgeNodes: KnowledgeNode[] = [];
+  const nodeIds: string[] = [];
   for (const candidate of plan.candidates as readonly TextPreviewCandidate[]) {
     const selection = selectionByKey.get(candidate.key);
     if (!selection) continue;
-    knowledgeNodes.push(createKnowledgeNode(problemPartRef.entityId, selection.title.trim() || candidate.text, plan.sourceInstance.id, now));
+    if (candidate.existingEntityId) { nodeIds.push(candidate.existingEntityId); continue; }
+    const node = createKnowledgeNode(problemPartRef.entityId, selection.title.trim() || candidate.text, plan.sourceInstance.id, now);
+    knowledgeNodes.push(node);
+    nodeIds.push(node.id);
   }
-  if (!knowledgeNodes.length) return EMPTY_OUTCOME;
+  if (!nodeIds.length) return EMPTY_OUTCOME;
 
   // One SHARED Research task for the whole confirmed batch (section 10:
   // "Related Knowledge Nodes may share one Research task") -- never one
@@ -428,7 +476,7 @@ function confirmKnowledgeDiscovery(plan: PreviewPlan, selectionByKey: ReadonlyMa
   // from the dedicated SHARED_TASK_SELECTION_KEY entry, not from any one
   // node candidate (node inclusion and the shared task's own fields are
   // independent).
-  const relatedEntityRefs: readonly ContentEntityRef[] = knowledgeNodes.map((node) => ref("KNOWLEDGE_NODE", node.id));
+  const relatedEntityRefs: readonly ContentEntityRef[] = nodeIds.map((id) => ref("KNOWLEDGE_NODE", id));
   const seed = buildTaskInstanceSeed(plan.targetStep, plan.targetTaskType, plan.sourceInstance.id, problemPartRef, relatedEntityRefs);
   const sharedSelection = selectionByKey.get(SHARED_TASK_SELECTION_KEY);
   const transferred = sharedSelection ? applyContextTransfer(seed, plan.sourceInstance, sharedSelection.selections) : { fieldValues: seed.fieldValues, fieldProvenance: [] };

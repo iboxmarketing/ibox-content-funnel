@@ -95,7 +95,9 @@ function StepRow({
   );
 }
 
-function ValidationPanel({ errors }: { errors: ReturnType<typeof validateWorkflowTemplate> }) {
+function ValidationPanel({ errors, steps }: { errors: ReturnType<typeof validateWorkflowTemplate>; steps: readonly WorkflowStep[] }) {
+  // Messages carry step ids; show the step names people actually see.
+  const readable = (message: string) => steps.reduce((text, step) => text.split(step.id).join(step.nameTemplate), message);
   const blocking = errors.filter((error) => error.severity === "ERROR");
   const warnings = errors.filter((error) => error.severity === "WARNING");
   if (!errors.length) {
@@ -106,13 +108,13 @@ function ValidationPanel({ errors }: { errors: ReturnType<typeof validateWorkflo
       {blocking.length > 0 && (
         <div className="rounded-xl border border-red-200 bg-red-50 p-3">
           <p className="flex items-center gap-2 text-xs font-bold text-red-800"><AlertTriangle className="size-4" /> {blocking.length} ta xato — saqlashni to’xtatadi</p>
-          <ul className="mt-2 space-y-1.5 text-[11px] text-red-700">{blocking.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {error.message}</li>)}</ul>
+          <ul className="mt-2 space-y-1.5 text-[11px] text-red-700">{blocking.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {readable(error.message)}</li>)}</ul>
         </div>
       )}
       {warnings.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
           <p className="flex items-center gap-2 text-xs font-bold text-amber-800"><AlertTriangle className="size-4" /> {warnings.length} ta ogohlantirish — saqlashga xalaqit bermaydi</p>
-          <ul className="mt-2 space-y-1.5 text-[11px] text-amber-700">{warnings.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {error.message}</li>)}</ul>
+          <ul className="mt-2 space-y-1.5 text-[11px] text-amber-700">{warnings.map((error, index) => <li key={index}>• <span className="font-mono">{error.code}</span> — {readable(error.message)}</li>)}</ul>
         </div>
       )}
     </div>
@@ -195,7 +197,7 @@ export function WorkflowTemplateBuilder() {
                 </div>
               </div>
 
-              <ValidationPanel errors={errors} />
+              <ValidationPanel errors={errors} steps={template.steps} />
 
               <div className="flex items-center justify-between"><h3 className="flex items-center gap-2 font-semibold text-slate-950"><GitBranch className="size-4 text-blue-700" /> Steps ({template.steps.length})</h3><Button type="button" variant="outline" size="sm" onClick={addNewStep}><Plus className="size-4" /> Step qo’shish</Button></div>
               <div className="space-y-3">

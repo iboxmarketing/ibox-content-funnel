@@ -70,7 +70,7 @@ function complete(w, instance, fieldValues = {}, { deadline = "2026-10-20", conf
   decision.created = created;
   return decision;
 }
-const reconcile = (w, now) => { const drafts = dist.reconcileDueRuntimeTasks({ now, instances: w.instances, taskTypesById: w.types }, TASK_TYPE_FIXTURES); return spawn(w, drafts); };
+const reconcile = (w, now) => { const drafts = dist.reconcileDueRuntimeTasks({ now, instances: w.instances, taskTypesById: w.types, content: w.content }, TASK_TYPE_FIXTURES); return spawn(w, drafts); };
 
 /** Reel A is READY -> Distribution Plan task completed with the given channels -> publish tasks. */
 function planPublish(w, selections) {
@@ -78,7 +78,6 @@ function planPublish(w, selections) {
   const decision = complete(w, planTask, { channels: Object.keys(selections) }, { selectionFor: (c) => selections[c.channel] ?? {} });
   return { planTask, publishTasks: decision.created };
 }
-const publishFields = (instance) => ({ ...instance.fieldValues });
 
 // --- Distribution Plan ---
 
@@ -100,7 +99,7 @@ test("the plan needs at least one channel; the channel list is configuration (mi
   const w = newWorld();
   const plan = spawn(w, [dist.buildDistributionPlanTask(material(w), typeByName("Distribution Plan"))])[0];
   assert.equal(completion.requestTaskCompletion(ctxOf(w, patch(w, plan, { deadline: "2026-10-20" })), fixedNow).kind, "BLOCKED");
-  assert.deepEqual([...entity.CHANNELS], ["Instagram", "Telegram", "LinkedIn", "X", "YouTube"]);
+  assert.deepEqual([...entity.V1_PUBLISH_CHANNEL_FIXTURES], ["Instagram", "Telegram", "LinkedIn", "X", "YouTube"]);
 });
 
 test("one Material -> multiple channels -> exactly one Publish/Schedule task per INCLUDED channel, with separate deadlines", () => {
@@ -412,4 +411,147 @@ test("review demo: a review-required task goes REVIEW -> REVISION -> REVIEW -> a
 
 test("no new operational task status was introduced by Sprint 6", () => {
   assert.deepEqual([...ti.TASK_INSTANCE_STATUSES], ["ASSIGNED", "IN_PROGRESS", "BLOCKED", "REVIEW", "REVISION", "DONE", "CANCELLED"]);
+});
+
+// --- Sprint 7: one Learning cycle per Material ---
+
+const reviewOf = (w) => w.content.materialResultReviews.find((r) => r.materialId === w.material.id);
+const learningsOf = (w) => w.instances.filter((i) => nameOf(i) === "Learning" && i.contentRef?.entityId === w.material.id);
+
+test("Sprint 7: two successful channels feed ONE Material-level result review and exactly ONE Learning", () => {
+  const w = newWorld({ destinationStatus: "READY" });
+  const telegram = publishTask(w, "Telegram", "PUBLISH_NOW");
+  complete(w, telegram, { published: true, "result-review-at": "2026-11-20" });
+  const instagram = publishTask(w, "Instagram", "SCHEDULE");
+  complete(w, instagram, { "scheduled-publish-at": "2026-10-30T10:00" });
+  const [check] = reconcile(w, "2026-10-31T00:00");
+  complete(w, check, { outcome: "PUBLISHED_SUCCESSFULLY", "result-review-at": "2026-11-10" });
+
+  assert.equal(w.content.materialResultReviews.length, 1);
+  assert.equal(reviewOf(w).resultReviewAt, "2026-11-10", "latest explicitly confirmed date wins");
+  assert.deepEqual(reviewOf(w).sourcePublishTaskIds, [telegram.id, check.id]);
+
+  assert.deepEqual(reconcile(w, "2026-11-09T23:59"), []);
+  const created = reconcile(w, "2026-11-10T00:00");
+  assert.equal(created.length, 1);
+  assert.equal(nameOf(created[0]), "Learning");
+  assert.equal(created[0].title, "Learning — Reel A");
+  assert.deepEqual(reconcile(w, "2026-11-25T00:00"), [], "Telegram's earlier-stated date never adds a second Learning");
+  assert.equal(learningsOf(w).length, 1);
+});
+
+test("Sprint 7: Result Review Date is required only on the Material's FIRST successful publish; a later blank one keeps the Material date", () => {
+  const w = newWorld({ destinationStatus: "READY" });
+  const first = publishTask(w, "Telegram", "PUBLISH_NOW", { published: true });
+  assert.ok(completion.requestTaskCompletion(ctxOf(w, first), fixedNow).errors.some((e) => e.fieldId === "result-review-at"));
+  complete(w, first, { "result-review-at": "2026-11-20" });
+  const second = publishTask(w, "LinkedIn", "PUBLISH_NOW", { published: true });
+  assert.equal(complete(w, second).kind, "COMPLETED", "no date needed once the Material has one");
+  assert.equal(reviewOf(w).resultReviewAt, "2026-11-20");
+  assert.equal(reviewOf(w).sourcePublishTaskIds.length, 2);
+});
+
+test("Sprint 7: once a Learning exists (even completed), further publishes and reconciliation never create another", () => {
+  const w = newWorld({ destinationStatus: "READY" });
+  complete(w, publishTask(w, "Telegram", "PUBLISH_NOW"), { published: true, "result-review-at": "2026-11-01" });
+  const [learning] = reconcile(w, "2026-11-01T00:00");
+  complete(w, learning, { result: "r", "what-worked": "w", "next-step": "n" });
+  complete(w, publishTask(w, "X", "PUBLISH_NOW"), { published: true, "result-review-at": "2026-12-01" });
+  assert.deepEqual(reconcile(w, "2027-01-01T00:00"), []);
+  assert.equal(learningsOf(w).length, 1);
+});
+
+test("Sprint 7: the Material-level date can be edited manually; the edit adds no publish source", () => {
+  const w = newWorld({ destinationStatus: "READY" });
+  complete(w, publishTask(w, "Telegram", "PUBLISH_NOW"), { published: true, "result-review-at": "2026-11-01" });
+  apply(w, [{ type: "CONFIRM_MATERIAL_RESULT_REVIEW", materialId: w.material.id, resultReviewAt: "2026-11-15", sourceTaskId: null }]);
+  assert.equal(reviewOf(w).resultReviewAt, "2026-11-15");
+  assert.equal(reviewOf(w).sourcePublishTaskIds.length, 1);
+  assert.deepEqual(reconcile(w, "2026-11-10T00:00"), [], "the edited (later) date applies");
+  assert.equal(reconcile(w, "2026-11-15T00:00").length, 1);
+});
+
+test("Sprint 7: a failed or problematic Publish Check never starts a result review", () => {
+  for (const outcome of ["DID_NOT_PUBLISH", "PUBLISHED_WITH_ISSUE"]) {
+    const { w, check } = scheduledAndDue();
+    complete(w, check, { outcome, "result-review-at": "2026-11-01" }, { confirmAll: false });
+    assert.equal(reviewOf(w), undefined);
+    assert.deepEqual(reconcile(w, "2027-01-01T00:00"), []);
+  }
+});
+
+// --- Sprint 7: Material without Destination ---
+
+function ctaWorld(ctaType, { destinationStatus = "IN_PROGRESS", withDestination = true } = {}) {
+  const w = newWorld({ destinationStatus, withDestination });
+  apply(w, [{ type: "SET_MATERIAL_CTA", id: w.material.id, ctaType, ctaText: "CTA", destinationId: withDestination ? w.destination.id : null }]);
+  return w;
+}
+
+test("Sprint 7: a Material WITHOUT a Destination publishes (ENGAGEMENT / FOLLOW / READ_BLOG / NEXT_CONTENT)", () => {
+  for (const ctaType of ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "NEXT_CONTENT"]) {
+    const w = ctaWorld(ctaType, { withDestination: false });
+    assert.equal(completion.requestTaskCompletion(ctxOf(w, publishTask(w, "Telegram", "PUBLISH_NOW", NOW_FIELDS)), fixedNow).kind, "COMPLETED", ctaType);
+  }
+});
+
+test("Sprint 7: a destination-free CTA is not blocked even if a not-READY Destination is linked", () => {
+  for (const ctaType of ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "NEXT_CONTENT"]) {
+    const w = ctaWorld(ctaType);
+    assert.equal(dist.ctaDestinationIdForPublish(material(w)), null);
+    assert.deepEqual(dist.getPublishBlockers({ material: material(w), channel: "Telegram", content: w.content, instances: w.instances, taskTypesById: w.types }), [], ctaType);
+  }
+});
+
+test("Sprint 7: a CTA that references an exact Destination still requires it READY", () => {
+  for (const ctaType of ["RESOURCE", "COMMERCIAL", "WATCH_YOUTUBE", "CUSTOM"]) {
+    const w = ctaWorld(ctaType);
+    const decision = completion.requestTaskCompletion(ctxOf(w, publishTask(w, "Telegram", "PUBLISH_NOW", NOW_FIELDS)), fixedNow);
+    assert.equal(decision.kind, "BLOCKED", ctaType);
+    apply(w, [{ type: "SET_DESTINATION_STATUS", id: w.destination.id, status: "READY" }]);
+    assert.equal(completion.requestTaskCompletion(ctxOf(w, publishTask(w, "X", "PUBLISH_NOW", NOW_FIELDS)), fixedNow).kind, "COMPLETED", ctaType);
+  }
+  // CTA not chosen yet + linked Destination: conservatively gated.
+  const noCta = newWorld({ destinationStatus: "IN_PROGRESS" });
+  const bare = { ...material(noCta), ctaType: null };
+  assert.equal(dist.ctaDestinationIdForPublish(bare), noCta.destination.id);
+});
+
+// --- Sprint 7: queue eligibility contradictions ---
+
+test("Sprint 7: no Material is in contradictory production queues", () => {
+  const w = newWorld({ destinationStatus: "READY", materialStatus: "PLANNED" });
+  const planning = spawn(w, [{ taskTypeId: typeByName("Planning").id, workflowTemplateId: null, workflowStepId: null, title: "Planning", assignee: null, deadline: "2026-10-20", fieldValues: {}, customFields: [], links: [], sourceTaskId: null, contentRef: entity.ref("MATERIAL", w.material.id) }])[0];
+  patch(w, planning, { status: "DONE" });
+  const queues = () => ({
+    shoot: mp.getReadyForShootMaterials(w.content, w.instances, w.types).map((m) => m.id),
+    distribution: mp.getReadyForDistribution(w.content, w.instances, w.types).map((r) => r.material.id),
+  });
+  assert.deepEqual(queues(), { shoot: [w.material.id], distribution: [] });
+
+  // A READY (e.g. edited) Material is never offered for a shoot again.
+  apply(w, [{ type: "SET_MATERIAL_STATUS", id: w.material.id, status: "READY" }]);
+  assert.deepEqual(queues(), { shoot: [], distribution: [w.material.id] });
+
+  // Once its Distribution Plan exists it has left "Ready for Distribution".
+  spawn(w, [dist.buildDistributionPlanTask(material(w), typeByName("Distribution Plan"))]);
+  assert.deepEqual(queues(), { shoot: [], distribution: [] });
+
+  apply(w, [{ type: "SET_MATERIAL_STATUS", id: w.material.id, status: "PUBLISHED" }]);
+  assert.deepEqual(queues(), { shoot: [], distribution: [] });
+});
+
+test("Sprint 7: a cancelled Distribution Plan returns the Material to Ready for Distribution", () => {
+  const w = newWorld();
+  const plan = spawn(w, [dist.buildDistributionPlanTask(material(w), typeByName("Distribution Plan"))])[0];
+  assert.equal(mp.getReadyForDistribution(w.content, w.instances, w.types).length, 0);
+  patch(w, plan, { status: "CANCELLED" });
+  assert.equal(mp.getReadyForDistribution(w.content, w.instances, w.types).length, 1);
+  assert.equal(dist.getDistributionPlanEligibleMaterials(w.content, w.instances, w.types).length, 1);
+});
+
+test("Sprint 7: the one V1 channel vocabulary is the named fixture list", () => {
+  assert.equal(entity.CHANNELS, undefined, "no second, competing CHANNELS export");
+  const plan = typeByName("Distribution Plan").requiredFields.find((f) => f.id === "channels");
+  assert.deepEqual(plan.options.map((o) => o.value), [...entity.V1_PUBLISH_CHANNEL_FIXTURES]);
 });

@@ -92,6 +92,11 @@ export interface TaskRuntimeHandler {
    * while its final asset review is still open -- Distribution planning
    * is allowed before final approval; only Publish is not. */
   readonly onSubmitForReview?: (context: TaskRuntimeContext) => ContentEntityAction[];
+  /** Sprint 7: when this Task Type is a workflow's ROOT step, which content
+   * entity the employee must pick on "Start workflow" (the task's
+   * contentRef). Replaces the old view-level "first seeded Problem
+   * Category" demo wiring. */
+  readonly startsOn?: "PROBLEM_CATEGORY";
 }
 
 const NO_EFFECT: Omit<TaskRuntimeCompletionResult, "completeNow"> = { entityActions: [], taskDrafts: [], plan: null };
@@ -141,7 +146,7 @@ const angleHandler: TaskRuntimeHandler = {
 
 const destinationDecisionHandler: TaskRuntimeHandler = {
   uiBlock: "DESTINATION_DECISION",
-  hiddenFieldIds: ["chosen-destination-id", "destination-type"],
+  hiddenFieldIds: ["create-new", "chosen-destination-id", "destination-type"],
   validateCompletion: ({ instance }) => {
     const createNew = instance.fieldValues["create-new"] === true;
     const chosen = typeof instance.fieldValues["chosen-destination-id"] === "string" ? instance.fieldValues["chosen-destination-id"] : "";
@@ -273,11 +278,30 @@ function publishBlockers(context: TaskRuntimeContext): string[] {
   return getPublishBlockers({ material, channel: publishInfoOf(context.instance).channel, content: context.content, instances: context.allInstances, taskTypesById: context.taskTypesById });
 }
 
+/** True once the Material already has a Material-level Result Review Date
+ * (from an earlier successful channel or a manual edit). */
+function materialHasResultReviewDate(context: TaskRuntimeContext): boolean {
+  const material = materialOf(context);
+  return Boolean(material && context.content.materialResultReviews.find((r) => r.materialId === material.id)?.resultReviewAt);
+}
+
+/** A confirmed successful publish: first one moves the Material to
+ * PUBLISHED, and every one feeds the Material's single result review
+ * (latest explicitly stated date wins; blank keeps the current one). */
+function confirmedPublishActions(context: TaskRuntimeContext, material: Material | null): ContentEntityAction[] {
+  if (!material) return [];
+  const stated = context.instance.fieldValues["result-review-at"];
+  return [
+    { type: "SET_MATERIAL_STATUS", id: material.id, status: "PUBLISHED" },
+    { type: "CONFIRM_MATERIAL_RESULT_REVIEW", materialId: material.id, resultReviewAt: typeof stated === "string" && stated ? stated : null, sourceTaskId: context.instance.id },
+  ];
+}
+
 const publishScheduleHandler: TaskRuntimeHandler = {
   uiBlock: "PUBLISH_CONTEXT",
   hiddenFieldIds: ["channel"],
   validateCompletion: (context) => [
-    ...validatePublishTask(context.instance),
+    ...validatePublishTask(context.instance, materialHasResultReviewDate(context)),
     ...publishBlockers(context).map((message): CompletionValidationError => ({ code: "INVALID_FIELD_VALUE", message })),
   ],
   complete: (context) => {
@@ -287,7 +311,7 @@ const publishScheduleHandler: TaskRuntimeHandler = {
     // Material to PUBLISHED. An immediate publish is that confirmation;
     // a scheduled one is NOT (scheduled != published) -- its Publish Check
     // is.
-    const entityActions: ContentEntityAction[] = material && info.mode === "PUBLISH_NOW" ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "PUBLISHED" }] : [];
+    const entityActions = info.mode === "PUBLISH_NOW" ? confirmedPublishActions(context, material) : [];
     return { entityActions, taskDrafts: [], plan: null, completeNow: true };
   },
 };
@@ -295,12 +319,11 @@ const publishScheduleHandler: TaskRuntimeHandler = {
 const publishCheckHandler: TaskRuntimeHandler = {
   uiBlock: "PUBLISH_CONTEXT",
   hiddenFieldIds: ["channel"],
-  validateCompletion: (context) => validatePublishCheck(context.instance),
+  validateCompletion: (context) => validatePublishCheck(context.instance, materialHasResultReviewDate(context)),
   complete: (context) => {
     const material = materialOf(context);
     if (context.instance.fieldValues["outcome"] === "PUBLISHED_SUCCESSFULLY") {
-      const entityActions: ContentEntityAction[] = material ? [{ type: "SET_MATERIAL_STATUS", id: material.id, status: "PUBLISHED" }] : [];
-      return { entityActions, taskDrafts: [], plan: null, completeNow: true };
+      return { entityActions: confirmedPublishActions(context, material), taskDrafts: [], plan: null, completeNow: true };
     }
     // DID_NOT_PUBLISH / PUBLISHED_WITH_ISSUE: OFFER Fix / Republish through
     // the normal Preview -> Confirm; nothing is created unless confirmed.
@@ -311,6 +334,7 @@ const publishCheckHandler: TaskRuntimeHandler = {
 
 /** THE one place special Task Type behavior is registered. */
 export const TASK_RUNTIME_HANDLERS: Readonly<Record<string, TaskRuntimeHandler>> = {
+  "Problem Split": { startsOn: "PROBLEM_CATEGORY" },
   Angle: angleHandler,
   "Destination Decision": destinationDecisionHandler,
   "Repurpose Map": repurposeMapHandler,

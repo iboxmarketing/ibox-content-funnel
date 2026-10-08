@@ -63,8 +63,10 @@ function instanceForStep(step, overrides = {}) {
   }, fixedNow);
 }
 
+/** Mirrors the preview dialog's defaults: every candidate included except
+ * existing entities offered opt-in (`defaultIncluded: false`, Sprint 7). */
 function selectAll(plan, overrides = {}) {
-  return plan.candidates.map((c) => ({ key: c.key, included: true, title: "", assignee: "", deadline: "", selections: [], ...overrides }));
+  return plan.candidates.map((c) => ({ key: c.key, included: c.defaultIncluded !== false, title: "", assignee: "", deadline: "", selections: [], ...overrides }));
 }
 
 // --- Problem Split -> ProblemPart candidates ---
@@ -80,8 +82,12 @@ test("Problem Split: multiple Components lines become preview candidates", () =>
 
   const plan = buildPreviewPlan({ template, allInstances: [source], settledSourceInstance: source, sourceTaskType: findTaskTypeFixtureByName("Problem Split"), taskTypesById, contentEntities: entityState });
   assert.equal(plan.mode, "PROBLEM_SPLIT_TO_PARTS");
-  assert.equal(plan.candidates.length, 3);
-  assert.deepEqual(plan.candidates.map((c) => c.text), ["Komponent A", "Komponent B", "Komponent C"]);
+  const fromLines = plan.candidates.filter((c) => c.defaultIncluded !== false);
+  assert.equal(fromLines.length, 3);
+  assert.deepEqual(fromLines.map((c) => c.text), ["Komponent A", "Komponent B", "Komponent C"]);
+  // Sprint 7: the category's existing parts are offered too, opt-in only.
+  const existing = plan.candidates.filter((c) => c.defaultIncluded === false);
+  assert.ok(existing.every((c) => c.existingEntityId));
 });
 
 test("Problem Split: selected components create ProblemPart entities and one Knowledge Discovery task each", () => {

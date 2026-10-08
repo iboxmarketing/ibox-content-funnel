@@ -7,27 +7,26 @@
  * `contentRef` (none of these tasks is a knowledge-tree node):
  *
  *   Material -> Distribution Plan -> Publish/Schedule (x channel)
- *            -> Publish Check (scheduled only) -> Learning
+ *            -> Publish Check (scheduled only)
+ *   Material -> MaterialResultReview (one per Material) -> Learning (one)
  *
- * CHANNELS: the repository has no canonical publishing-channel model
- * (lib/tracking-preview-fixtures.ts only carries synthetic demo `platform`
- * strings for the CO-S6 tracking preview, unrelated to publishing), so
- * this is the one minimal list the Distribution Plan Task Type offers.
- * It is configuration, not a second channel library.
+ * Channels come from V1_PUBLISH_CHANNEL_FIXTURES (content-entity.ts), which
+ * documents why the legacy account-level `ChannelAccount` model is not
+ * mapped yet.
  */
 import type { CompletionValidationError, TaskInstance, TaskInstanceDraft } from "./task-instance";
 import type { TaskType } from "./task-type";
 import { buildStandaloneTaskInstanceSeed } from "./workflow-runtime";
-import { CHANNELS, PUBLISH_CHECK_OUTCOMES, PUBLISH_MODES, ref, type Destination, type Material } from "./content-entity";
+import { V1_PUBLISH_CHANNEL_FIXTURES, PUBLISH_CHECK_OUTCOMES, PUBLISH_MODES, ref, type Destination, type Material, type MaterialResultReview } from "./content-entity";
 import type { ContentEntityState } from "./content-entity-store";
-import { PRODUCTION_TASK_DEPENDENCY_METADATA } from "./material-production";
+import { DESTINATION_FREE_CTA_TYPES, DISTRIBUTION_PLAN_TASK_TYPE_NAME, PRODUCTION_TASK_DEPENDENCY_METADATA } from "./material-production";
 
-export { CHANNELS, PUBLISH_MODES, PUBLISH_CHECK_OUTCOMES };
-export type Channel = (typeof CHANNELS)[number];
+export { V1_PUBLISH_CHANNEL_FIXTURES, PUBLISH_MODES, PUBLISH_CHECK_OUTCOMES };
+export type Channel = (typeof V1_PUBLISH_CHANNEL_FIXTURES)[number];
 export type PublishMode = (typeof PUBLISH_MODES)[number];
 export type PublishCheckOutcome = (typeof PUBLISH_CHECK_OUTCOMES)[number];
 
-export const DISTRIBUTION_PLAN_TASK_TYPE_NAME = "Distribution Plan";
+export { DISTRIBUTION_PLAN_TASK_TYPE_NAME };
 export const PUBLISH_SCHEDULE_TASK_TYPE_NAME = "Publish / Schedule";
 export const PUBLISH_CHECK_TASK_TYPE_NAME = "Publish Check";
 export const LEARNING_TASK_TYPE_NAME = "Learning";
@@ -114,12 +113,24 @@ export interface PublishBlockerInput {
   readonly assetRequirements?: ChannelAssetRequirements;
 }
 
+/** The exact Destination this Material's CTA points at, or null. A Material
+ * WITHOUT a Destination is allowed (ENGAGEMENT / FOLLOW / READ_BLOG /
+ * NEXT_CONTENT CTAs never need one); a destination-free CTA type never
+ * makes Publish wait on a Destination even if one is linked. A CTA that is
+ * not chosen yet is treated conservatively as pointing at the linked one. */
+export function ctaDestinationIdForPublish(material: Pick<Material, "destinationId" | "ctaType">): string | null {
+  if (!material.destinationId) return null;
+  if (material.ctaType && DESTINATION_FREE_CTA_TYPES.includes(material.ctaType)) return null;
+  return material.destinationId;
+}
+
 /** Why this Publish/Schedule task cannot be completed right now (empty =
  * nothing blocks it). Never consulted when creating a Distribution Plan. */
 export function getPublishBlockers(input: PublishBlockerInput): string[] {
   const reasons: string[] = [];
-  const destination: Destination | undefined = input.material.destinationId ? input.content.destinations.find((d) => d.id === input.material.destinationId) : undefined;
-  if (input.material.destinationId && (!destination || destination.status !== "READY")) {
+  const destinationId = ctaDestinationIdForPublish(input.material);
+  const destination: Destination | undefined = destinationId ? input.content.destinations.find((d) => d.id === destinationId) : undefined;
+  if (destinationId && (!destination || destination.status !== "READY")) {
     reasons.push(`Destination not READY${destination ? `: ${destination.name} (${destination.status})` : ""}`);
   }
   for (const review of unresolvedFinalReviews(input.material.id, input.instances, input.taskTypesById)) {
@@ -136,7 +147,11 @@ export function getPublishBlockers(input: PublishBlockerInput): string[] {
 
 // --- Publish / Schedule completion rules (sections 8, 12-13) ---
 
-export function validatePublishTask(instance: TaskInstance): CompletionValidationError[] {
+/** Result Review Date is required on the Material's FIRST confirmed
+ * successful publish (when no MaterialResultReview exists yet). Later
+ * channels may leave it blank (the Material keeps its date) or state a new
+ * one (it replaces the Material-level date). */
+export function validatePublishTask(instance: TaskInstance, materialHasResultReviewDate = false): CompletionValidationError[] {
   const info = publishInfoOf(instance);
   if (!info.mode) return [{ code: "MISSING_REQUIRED_FIELD", fieldId: "publish-mode", message: "Publish mode tanlanishi shart." }];
   if (info.mode === "SCHEDULE") {
@@ -147,14 +162,14 @@ export function validatePublishTask(instance: TaskInstance): CompletionValidatio
   }
   const errors: CompletionValidationError[] = [];
   if (!info.published) errors.push({ code: "MISSING_REQUIRED_FIELD", fieldId: "published", message: "Nashr qilinganini tasdiqlang." });
-  if (!info.resultReviewAt) errors.push({ code: "MISSING_REQUIRED_FIELD", fieldId: "result-review-at", message: "Result Review Date majburiy." });
+  if (!info.resultReviewAt && !materialHasResultReviewDate) errors.push({ code: "MISSING_REQUIRED_FIELD", fieldId: "result-review-at", message: "Material birinchi marta nashr qilinmoqda: Result Review Date majburiy." });
   return errors;
 }
 
-export function validatePublishCheck(instance: TaskInstance): CompletionValidationError[] {
+export function validatePublishCheck(instance: TaskInstance, materialHasResultReviewDate = false): CompletionValidationError[] {
   const outcome = textValue(instance, "outcome");
   if (!(PUBLISH_CHECK_OUTCOMES as readonly string[]).includes(outcome)) return [{ code: "MISSING_REQUIRED_FIELD", fieldId: "outcome", message: "Natijani tanlang." }];
-  if (outcome === "PUBLISHED_SUCCESSFULLY" && !textValue(instance, "result-review-at")) {
+  if (outcome === "PUBLISHED_SUCCESSFULLY" && !textValue(instance, "result-review-at") && !materialHasResultReviewDate) {
     return [{ code: "MISSING_REQUIRED_FIELD", fieldId: "result-review-at", message: "Muvaffaqiyatli nashr uchun Result Review Date majburiy." }];
   }
   return [];
@@ -168,6 +183,8 @@ export interface ReconcileInput {
   readonly now: string | number | Date;
   readonly instances: readonly TaskInstance[];
   readonly taskTypesById: TaskTypesById;
+  /** Material titles + the Material-level result reviews. */
+  readonly content: Pick<ContentEntityState, "materials" | "materialResultReviews">;
 }
 
 function toMs(value: string | number | Date): number {
@@ -184,16 +201,23 @@ function dateOnly(value: string): string {
   return value.slice(0, 10);
 }
 
+/** Every Learning task of a Material (any status). V1 rule: one Learning
+ * cycle per Material -- once one exists (open, done, or cancelled), no
+ * further Learning is created automatically; a manual re-review is a later
+ * feature. */
+export function learningTasksForMaterial(materialId: string, instances: readonly TaskInstance[], taskTypesById: TaskTypesById): readonly TaskInstance[] {
+  return forMaterial(instances, materialId).filter((i) => typeName(taskTypesById, i) === LEARNING_TASK_TYPE_NAME);
+}
+
 /**
  * Pure and idempotent. Returns drafts only for work that is due AND not
  * already represented by an existing task:
  *  - a SCHEDULE publish task that is DONE and whose scheduledPublishAt has
  *    passed -> exactly one Publish Check ("Scheduled does not mean
- *    published");
- *  - a confirmed publish (PUBLISH_NOW done, or a Publish Check that
- *    resolved PUBLISHED_SUCCESSFULLY) whose resultReviewAt has passed ->
- *    exactly one Learning task (per publish occurrence, i.e. per
- *    Material x Channel).
+ *    published") -- this stays per channel, it is operational;
+ *  - a Material whose MaterialResultReview date has passed and that has no
+ *    Learning task yet -> exactly ONE Learning for the Material, however
+ *    many channels published successfully.
  * Calling it again with the instances it already produced yields [].
  */
 export function reconcileDueRuntimeTasks(input: ReconcileInput, taskTypes: readonly TaskType[]): TaskInstanceDraft[] {
@@ -207,29 +231,34 @@ export function reconcileDueRuntimeTasks(input: ReconcileInput, taskTypes: reado
 
   for (const task of input.instances) {
     if (!task.contentRef || task.contentRef.entityType !== "MATERIAL") continue;
-    const name = typeName(input.taskTypesById, task);
     const info = publishInfoOf(task);
-
-    if (name === PUBLISH_SCHEDULE_TASK_TYPE_NAME && info.mode === "SCHEDULE" && task.status === "DONE" && checkType) {
+    if (typeName(input.taskTypesById, task) === PUBLISH_SCHEDULE_TASK_TYPE_NAME && info.mode === "SCHEDULE" && task.status === "DONE" && checkType) {
       if (Date.parse(info.scheduledPublishAt) <= nowMs && !hasChild(task, PUBLISH_CHECK_TASK_TYPE_NAME)) {
         const seed = buildStandaloneTaskInstanceSeed(checkType, `${checkType.name} — ${titleRest(task)}`, task.id, task.contentRef);
         drafts.push({ ...seed, deadline: dateOnly(info.scheduledPublishAt), fieldValues: { channel: info.channel } });
       }
     }
+  }
 
-    const confirmedPublish =
-      (name === PUBLISH_SCHEDULE_TASK_TYPE_NAME && info.mode === "PUBLISH_NOW" && task.status === "DONE" && info.published) ||
-      (name === PUBLISH_CHECK_TASK_TYPE_NAME && task.status === "DONE" && textValue(task, "outcome") === "PUBLISHED_SUCCESSFULLY");
-    if (confirmedPublish && learningType) {
-      const reviewAt = textValue(task, "result-review-at");
-      if (reviewAt && Date.parse(reviewAt) <= nowMs && !hasChild(task, LEARNING_TASK_TYPE_NAME)) {
-        const channel = textValue(task, "channel");
-        const seed = buildStandaloneTaskInstanceSeed(learningType, `${learningType.name} — ${titleRest(task)}`, task.id, task.contentRef);
-        drafts.push({ ...seed, deadline: dateOnly(reviewAt), fieldValues: { channel } });
-      }
+  if (learningType) {
+    for (const review of input.content.materialResultReviews) {
+      if (!review.resultReviewAt || Date.parse(review.resultReviewAt) > nowMs) continue;
+      if (learningTasksForMaterial(review.materialId, input.instances, input.taskTypesById).length) continue;
+      const material = input.content.materials.find((m) => m.id === review.materialId);
+      if (!material) continue;
+      const lastSource = review.sourcePublishTaskIds[review.sourcePublishTaskIds.length - 1] ?? null;
+      const seed = buildStandaloneTaskInstanceSeed(learningType, `${learningType.name} — ${material.title}`, lastSource, ref("MATERIAL", material.id));
+      drafts.push({ ...seed, deadline: dateOnly(review.resultReviewAt) });
     }
   }
   return drafts;
+}
+
+/** The Material's one result review, plus its derived Learning state. */
+export function materialResultReviewState(review: MaterialResultReview, instances: readonly TaskInstance[], taskTypesById: TaskTypesById, now: string | number | Date) {
+  const learning = learningTasksForMaterial(review.materialId, instances, taskTypesById)[0] ?? null;
+  const due = Boolean(review.resultReviewAt) && Date.parse(review.resultReviewAt as string) <= toMs(now);
+  return { review, learning, due };
 }
 
 // --- Read models for the Production Queue (sections 16, 21) ---

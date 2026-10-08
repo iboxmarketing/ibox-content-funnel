@@ -4,7 +4,7 @@
  * UI special-cases any of these ids or names. Deleting one from the
  * library (once persistence exists) would not break any code path.
  */
-import { CHANNELS, CTA_TYPES, PUBLISH_CHECK_OUTCOMES, PUBLISH_MODES } from "./content-entity";
+import { V1_PUBLISH_CHANNEL_FIXTURES, CTA_TYPES, PUBLISH_CHECK_OUTCOMES, PUBLISH_MODES } from "./content-entity";
 import { createTaskType, type AssigneeRule, type FieldDefinition, type RecommendedDay, type TaskType, type TaskTypeDraft } from "./task-type";
 
 const OWNER: AssigneeRule = { kind: "DEFAULT_CONTENT_OWNER" };
@@ -67,18 +67,21 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     name: "Problem Split",
     description: "Canonical muammoni Problem Part'larga ajratish.",
     requiredFields: [longTextField("components", "Components")],
+    defaultPrompt: "Quyidagi canonical muammoni mustaqil Problem Part'larga ajrat. Har bir part alohida qatorda bo'lsin.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Knowledge Discovery",
     description: "Bitta Problem Part uchun Knowledge Node nomzodlarini aniqlash.",
     requiredFields: [longTextField("knowledge-nodes", "Knowledge Nodes")],
+    defaultPrompt: "Quyidagi Problem Part uchun Knowledge Node nomzodlarini top. Har bir node alohida qatorda bo'lsin.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Research",
     description: "Bog'langan Knowledge Node'lar uchun umumiy research artefakti.",
     requiredFields: [urlField("research-link", "Research Link", true), longTextField("research-summary", "Research Summary")],
+    defaultPrompt: "Quyidagi Knowledge Node'lar bo'yicha research qil: sabablar, oqibatlar, yechimlar va manbalar.\n\n---\nINPUT:\n",
     recommendedDay: "MONDAY",
     allowedLinkLabels: ["Reference", "Raw"],
   })),
@@ -109,6 +112,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     name: "Angle",
     description: "Knowledge Node uchun kamida 5 angle ishlab chiqish.",
     requiredFields: [longTextField("angles", "Angles")],
+    defaultPrompt: "Quyidagi Knowledge Node va Blog asosida kamida 5 ta angle yoz. Har bir angle alohida qatorda bo'lsin.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
@@ -147,6 +151,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     name: "Repurpose Map",
     description: "Blog'dan Atomic Idea'larni qo'lda ajratib olish -- Task Detail'ning maxsus Atomic Idea muharririda (structured, free-text emas).",
     requiredFields: [],
+    defaultPrompt: "Quyidagi Blog'dan atomic idea'larni ajrat: PROBLEM, CAUSE, CONSEQUENCE, SOLUTION. Har biriga mos formatlarni taklif qil.\n\n---\nINPUT:\n",
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
@@ -218,7 +223,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
   seed(draft({
     name: "Distribution Plan",
     description: "Bitta Material uchun kanallarni qo'lda tanlash. Complete -> kanallar bo'yicha Preview -> Publish/Schedule tasklar.",
-    requiredFields: [multiSelectField("channels", "Kanallar", [...CHANNELS])],
+    requiredFields: [multiSelectField("channels", "Kanallar", [...V1_PUBLISH_CHANNEL_FIXTURES])],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
@@ -231,7 +236,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
       textField("channel", "Kanal (ichki)", false),
       dateTimeField("scheduled-publish-at", "Scheduled Publish At", false),
       booleanField("published", "Nashr qilindi", false),
-      dateField("result-review-at", "Result Review Date", false),
+      dateField("result-review-at", "Material Result Review Date", false),
       longTextField("channel-note", "Kanalga xos izoh / copy", false),
       textField("channel-cta-text", "Kanalga xos CTA matni (ixtiyoriy override)", false),
     ],
@@ -244,7 +249,7 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     requiredFields: [selectField("outcome", "Natija", [...PUBLISH_CHECK_OUTCOMES])],
     optionalFields: [
       textField("channel", "Kanal (ichki)", false),
-      dateField("result-review-at", "Result Review Date", false),
+      dateField("result-review-at", "Material Result Review Date", false),
       longTextField("issue-note", "Muammo izohi", false),
     ],
     allowedLinkLabels: ["Published URL", "Reference"],

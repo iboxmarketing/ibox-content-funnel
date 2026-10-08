@@ -204,10 +204,10 @@ export function ContentTreeView() {
                 {"state" in detail && <div><dt className="font-semibold text-slate-900">State</dt><dd>{detail.state}</dd></div>}
                 {"format" in detail && <div><dt className="font-semibold text-slate-900">Format</dt><dd>{detail.format}</dd></div>}
                 {"primaryLink" in detail && detail.primaryLink && <div><dt className="font-semibold text-slate-900">Link</dt><dd className="truncate">{detail.primaryLink}</dd></div>}
-                {"angleId" in detail && detail.angleId && <div><dt className="font-semibold text-slate-900">Angle</dt><dd className="truncate font-mono">{detail.angleId}</dd></div>}
+                {"angleId" in detail && detail.angleId && <div><dt className="font-semibold text-slate-900">Angle</dt><dd className="truncate">{state.angles.find((a) => a.id === detail.angleId)?.title ?? detail.angleId}</dd></div>}
                 {"destinationNeeded" in detail && <div><dt className="font-semibold text-slate-900">Destination kerak</dt><dd>{detail.destinationNeeded ? "Ha" : "Yo'q"}</dd></div>}
-                {"destinationId" in detail && <div><dt className="font-semibold text-slate-900">Aniq destination</dt><dd className="truncate font-mono">{detail.destinationId ?? "— (keyinroq tanlanadi)"}</dd></div>}
-                {"sourceTaskId" in detail && detail.sourceTaskId && <div><dt className="font-semibold text-slate-900">Manba task</dt><dd className="truncate font-mono">{detail.sourceTaskId}</dd></div>}
+                {"destinationId" in detail && <div><dt className="font-semibold text-slate-900">Aniq destination</dt><dd className="truncate">{detail.destinationId ? state.destinations.find((d) => d.id === detail.destinationId)?.name ?? detail.destinationId : "— (keyinroq tanlanadi)"}</dd></div>}
+                {"sourceTaskId" in detail && detail.sourceTaskId && <div><dt className="font-semibold text-slate-900">Manba task</dt><dd className="truncate">{runtimeState.instances.find((i) => i.id === detail.sourceTaskId)?.title ?? detail.sourceTaskId}</dd></div>}
                 <div><dt className="font-semibold text-slate-900">Yaratilgan</dt><dd>{new Date(detail.createdAt).toLocaleString("uz")}</dd></div>
               </dl>
               {selected?.type === "MATERIAL" && (() => {

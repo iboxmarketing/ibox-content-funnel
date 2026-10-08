@@ -22,7 +22,6 @@ const { QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE: template } = require(join(dir, "workflo
 const entity = require(join(dir, "content-entity.js"));
 const { initialContentEntityState, contentEntityReducer } = require(join(dir, "content-entity-store.js"));
 const ti = require(join(dir, "task-instance.js"));
-const mp = require(join(dir, "material-production.js"));
 const dist = require(join(dir, "distribution.js"));
 const completion = require(join(dir, "task-completion.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));

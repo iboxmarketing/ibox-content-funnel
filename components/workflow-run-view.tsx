@@ -22,14 +22,41 @@ import { GeneratedTaskPreview } from "@/components/generated-task-preview";
 import { buildTaskInstanceSeed, getStartableSteps } from "@/lib/workflow-runtime";
 import { confirmPreviewPlan, outcomeToEntityActions, type CandidateSelectionState, type PreviewPlan } from "@/lib/content-workflow";
 import { decideTaskReview, requestTaskCompletion, type CompletionDecision, type ReviewDecision } from "@/lib/task-completion";
-import type { TaskRuntimeContext } from "@/lib/task-runtime-handlers";
+import { resolveRuntimeHandler, type TaskRuntimeContext } from "@/lib/task-runtime-handlers";
 import { ref } from "@/lib/content-entity";
+import { labelForRef, type ContentEntityState } from "@/lib/content-entity-store";
+import { entityTypeLabelUz } from "@/lib/content-workflow";
 import type { TaskInstance } from "@/lib/task-instance";
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   DONE: "border-emerald-200 bg-emerald-50 text-emerald-700",
   CANCELLED: "border-slate-300 bg-slate-100 text-slate-500",
 };
+
+/** What a task works on, shown in the list so fanned-out tasks of the same
+ * step (identical titles) stay distinguishable (Sprint 7 pilot fix). */
+function workingOnLabel(content: ContentEntityState, instance: TaskInstance): string | null {
+  if (instance.contentRef) {
+    const name = labelForRef(content, instance.contentRef);
+    return name ? `${entityTypeLabelUz(instance.contentRef.entityType)}: ${name}` : null;
+  }
+  const related = instance.relatedEntityRefs ?? [];
+  const names = related.map((r) => labelForRef(content, r)).filter(Boolean);
+  return names.length ? names.join(", ") : null;
+}
+
+function TaskRow({ instance, typeName, workingOn, onOpen }: { instance: TaskInstance; typeName: string; workingOn: string | null; onOpen: () => void }) {
+  return (
+    <button type="button" onClick={onOpen} className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left hover:border-blue-200">
+      {instance.status === "DONE" && <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />}
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-slate-950">{instance.title}</p>
+        <p className="truncate text-[11px] text-slate-500">{typeName}{workingOn ? ` · ${workingOn}` : ""}</p>
+      </div>
+      <Badge variant="outline" className={STATUS_BADGE_CLASS[instance.status] ?? "border-blue-200 bg-blue-50 text-blue-700"}>{instance.status}{instance.outcome === "SKIPPED" ? " · SKIPPED" : ""}</Badge>
+    </button>
+  );
+}
 
 export function WorkflowRunView() {
   const { state: contentOsState } = useContentOsStore();
@@ -38,6 +65,7 @@ export function WorkflowRunView() {
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(contentOsState.workflowTemplates[0]?.id ?? null);
   const [openInstanceId, setOpenInstanceId] = useState<string | null>(null);
   const [pendingPlan, setPendingPlan] = useState<PreviewPlan | null>(null);
+  const [startCategoryId, setStartCategoryId] = useState<string>("");
 
   const taskTypesById = useMemo(() => new Map(contentOsState.taskTypes.map((t) => [t.id, t])), [contentOsState.taskTypes]);
   const template = contentOsState.workflowTemplates.find((t) => t.id === selectedTemplateId) ?? null;
@@ -50,17 +78,20 @@ export function WorkflowRunView() {
   const standaloneInstances = useMemo(() => runtimeState.instances.filter((instance) => !instance.workflowTemplateId), [runtimeState.instances]);
   const startableSteps = template ? getStartableSteps(template, instancesForTemplate) : [];
   const hasStarted = instancesForTemplate.length > 0;
+  // A root step whose handler declares `startsOn` needs the employee to
+  // pick that entity explicitly before the workflow starts.
+  const needsCategory = startableSteps.some((step) => {
+    const taskType = taskTypesById.get(step.taskTypeId);
+    return taskType ? resolveRuntimeHandler(taskType.name).startsOn === "PROBLEM_CATEGORY" : false;
+  });
+  const chosenCategoryId = startCategoryId || contentEntityStore.state.problemCategories[0]?.id || "";
 
   function startWorkflow() {
     if (!template) return;
     const drafts = startableSteps.flatMap((step) => {
       const taskType = taskTypesById.get(step.taskTypeId);
       if (!taskType) return [];
-      // Demo-fixture wiring: a freshly-started "Problem Split" works on
-      // the one seeded Problem Category (section 14's own example).
-      const contentRef = taskType.name === "Problem Split" && contentEntityStore.state.problemCategories[0]
-        ? ref("PROBLEM_CATEGORY", contentEntityStore.state.problemCategories[0].id)
-        : null;
+      const contentRef = resolveRuntimeHandler(taskType.name).startsOn === "PROBLEM_CATEGORY" && chosenCategoryId ? ref("PROBLEM_CATEGORY", chosenCategoryId) : null;
       return [buildTaskInstanceSeed(step, taskType, null, contentRef)];
     });
     if (!drafts.length) return;
@@ -175,38 +206,28 @@ export function WorkflowRunView() {
               {!hasStarted ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center">
                   <p className="text-sm text-slate-500">Hali boshlanmagan. Boshlanganda, bog’liqlik bo’lmagan birinchi step(lar) uchun task yaratiladi.</p>
-                  <Button type="button" className="mt-4 rounded-xl bg-blue-700 hover:bg-blue-800" disabled={!startableSteps.length} onClick={startWorkflow}><Play className="size-4" /> Workflow’ni boshlash</Button>
+                  {needsCategory && (
+                    <label className="mx-auto mt-4 block max-w-xs text-left text-[11px] font-semibold text-slate-600">Problem Category
+                      <select value={chosenCategoryId} onChange={(e) => setStartCategoryId(e.target.value)} className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs">
+                        {contentEntityStore.state.problemCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <Button type="button" className="mt-4 rounded-xl bg-blue-700 hover:bg-blue-800" disabled={!startableSteps.length || (needsCategory && !chosenCategoryId)} onClick={startWorkflow}><Play className="size-4" /> Workflow’ni boshlash</Button>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950"><ListTodo className="size-4 text-blue-700" /> Tasklar ({instancesForTemplate.length})</h3>
-                  {instancesForTemplate.map((instance) => {
-                    const taskType = taskTypesById.get(instance.taskTypeId);
-                    return (
-                      <button key={instance.id} type="button" onClick={() => setOpenInstanceId(instance.id)} className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left hover:border-blue-200">
-                        {instance.status === "DONE" && <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />}
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-semibold text-slate-950">{instance.title}</p>
-                          <p className="text-[11px] text-slate-500">{taskType?.name ?? instance.taskTypeId}</p>
-                        </div>
-                        <Badge variant="outline" className={STATUS_BADGE_CLASS[instance.status] ?? "border-blue-200 bg-blue-50 text-blue-700"}>{instance.status}{instance.outcome === "SKIPPED" ? " · SKIPPED" : ""}</Badge>
-                      </button>
-                    );
-                  })}
+                  {instancesForTemplate.map((instance) => (
+                    <TaskRow key={instance.id} instance={instance} typeName={taskTypesById.get(instance.taskTypeId)?.name ?? instance.taskTypeId} workingOn={workingOnLabel(contentEntityStore.state, instance)} onOpen={() => setOpenInstanceId(instance.id)} />
+                  ))}
                 </div>
               )}
               {standaloneInstances.length > 0 && (
                 <div className="space-y-2 pt-2">
                   <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-950"><ListTodo className="size-4 text-blue-700" /> Material va boshqa tasklar ({standaloneInstances.length})</h3>
                   {standaloneInstances.map((instance) => (
-                    <button key={instance.id} type="button" onClick={() => setOpenInstanceId(instance.id)} className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left hover:border-blue-200">
-                      {instance.status === "DONE" && <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />}
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-slate-950">{instance.title}</p>
-                        <p className="text-[11px] text-slate-500">{taskTypesById.get(instance.taskTypeId)?.name ?? instance.taskTypeId}</p>
-                      </div>
-                      <Badge variant="outline" className={STATUS_BADGE_CLASS[instance.status] ?? "border-blue-200 bg-blue-50 text-blue-700"}>{instance.status}</Badge>
-                    </button>
+                    <TaskRow key={instance.id} instance={instance} typeName={taskTypesById.get(instance.taskTypeId)?.name ?? instance.taskTypeId} workingOn={workingOnLabel(contentEntityStore.state, instance)} onOpen={() => setOpenInstanceId(instance.id)} />
                   ))}
                 </div>
               )}

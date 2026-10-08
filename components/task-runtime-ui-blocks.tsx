@@ -14,10 +14,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
 import { useContentEntityStore } from "@/components/content-entity-store-provider";
 import { anglesForKnowledgeNode, destinationsForProblemCategory, problemCategoryIdForMaterial } from "@/lib/content-entity-store";
-import { ATOMIC_IDEA_COVERAGE_TYPES, ATOMIC_IDEA_DECISIONS, DESTINATION_TYPES, MATERIAL_FORMATS, type Destination, type MaterialFormat } from "@/lib/content-entity";
+import { ATOMIC_IDEA_COVERAGE_TYPES, ATOMIC_IDEA_DECISIONS, DESTINATION_STATUSES, DESTINATION_TYPES, MATERIAL_FORMATS, type Destination, type DestinationStatus, type MaterialFormat } from "@/lib/content-entity";
 import { emptyAtomicIdeaDraft, validateAtomicIdeaCoverage, type AtomicIdeaDraft, type TaskInstance } from "@/lib/task-instance";
 import { isExactDestinationRequired } from "@/lib/material-production";
-import { getPublishBlockers, publishInfoOf } from "@/lib/distribution";
+import { ctaDestinationIdForPublish, getPublishBlockers, publishInfoOf } from "@/lib/distribution";
 import { useContentOsStore } from "@/components/content-os-store-provider";
 import { CTA_TYPES, type CtaType } from "@/lib/content-entity";
 import type { TaskUiBlockKey } from "@/lib/task-runtime-handlers";
@@ -214,13 +214,15 @@ function MaterialCtaBlock({ instance }: { instance: TaskInstance }) {
  * exact Destination + its status, and any blocking reasons. Read-only:
  * the blockers themselves are enforced by the task's runtime handler. */
 function PublishContextBlock({ instance }: { instance: TaskInstance }) {
-  const { state } = useContentEntityStore();
+  const { state, setDestinationStatus } = useContentEntityStore();
   const { state: runtimeState } = useTaskRuntimeStore();
   const { state: contentOsState } = useContentOsStore();
   const material = instance.contentRef?.entityType === "MATERIAL" ? state.materials.find((m) => m.id === instance.contentRef?.entityId) ?? null : null;
   if (!material) return null;
   const info = publishInfoOf(instance);
-  const destination = material.destinationId ? state.destinations.find((d) => d.id === material.destinationId) ?? null : null;
+  // Only the Destination the CTA actually points at matters for Publish.
+  const destinationId = ctaDestinationIdForPublish(material);
+  const destination = destinationId ? state.destinations.find((d) => d.id === destinationId) ?? null : null;
   const blockers = instance.status === "DONE" ? [] : getPublishBlockers({ material, channel: info.channel, content: state, instances: runtimeState.instances, taskTypesById: new Map(contentOsState.taskTypes.map((t) => [t.id, t])) });
   const channelCta = typeof instance.fieldValues["channel-cta-text"] === "string" ? instance.fieldValues["channel-cta-text"] : "";
 
@@ -230,7 +232,19 @@ function PublishContextBlock({ instance }: { instance: TaskInstance }) {
       <p><strong className="text-slate-900">Material:</strong> {material.title} ({material.format})</p>
       <p><strong className="text-slate-900">Kanal:</strong> {info.channel || "—"} · <strong className="text-slate-900">Mode:</strong> {info.mode ?? "—"}</p>
       <p><strong className="text-slate-900">CTA:</strong> {channelCta || material.ctaText || "—"} {material.ctaType ? `(${material.ctaType})` : ""}{channelCta ? " · kanalga xos" : ""}</p>
-      <p><strong className="text-slate-900">Destination:</strong> {destination ? `${destination.name} — ${destination.status}` : "yo’q"}</p>
+      {destination ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p><strong className="text-slate-900">Destination:</strong> {destination.name}</p>
+          {/* Sprint 7 pilot fix: update the Destination's status right here
+              instead of leaving the task for the Content Tree. Same store
+              action as the Destination Library. */}
+          <select aria-label="Destination holati" value={destination.status} disabled={instance.status === "DONE"} onChange={(e) => setDestinationStatus(destination.id, e.target.value as DestinationStatus)} className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px]">
+            {DESTINATION_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+          </select>
+        </div>
+      ) : (
+        <p><strong className="text-slate-900">Destination:</strong> yo’q — bu CTA Destination talab qilmaydi</p>
+      )}
       {blockers.length > 0 && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-red-700">
           <p className="flex items-center gap-1.5 font-bold"><AlertTriangle className="size-3.5" /> Publish bloklangan</p>

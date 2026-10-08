@@ -145,17 +145,27 @@ export type MaterialFormat = (typeof MATERIAL_FORMATS)[number];
 export const MATERIAL_STATUSES = ["PLANNED", "IN_PRODUCTION", "READY", "PUBLISHED"] as const;
 export type MaterialStatus = (typeof MATERIAL_STATUSES)[number];
 
-/** Section 3 (Sprint 5): the CTA belongs to the Material -- never a
- * separate Task, never a library. Selected AFTER Material creation, as
- * the last required part of the authoring task. */
-/** Sprint 6 vocabulary used by Task Type fixtures and lib/distribution.ts.
- * The repo has no canonical publishing-channel model (the CO-S6 tracking
- * preview's `platform` strings are synthetic demo data), so this is the one
- * minimal list -- configuration, not a channel library. */
-export const CHANNELS = ["Instagram", "Telegram", "LinkedIn", "X", "YouTube"] as const;
+/**
+ * V1 publishing channels -- the ONE channel vocabulary of the local Content
+ * OS runtime (Distribution Plan options, Publish/Schedule tasks).
+ *
+ * Sprint 7 channel audit: the repo's only channel model is the legacy
+ * forecast/planning `ChannelAccount` (lib/production-types.ts), loaded from
+ * the Sheets/Supabase production dataset. It is ACCOUNT-level
+ * (channelAccountId, accountName, timezone, weekly caps, free-form
+ * `platform` string) and is not loaded into the session-only Content OS,
+ * so the Distribution runtime cannot map onto it yet. These names are
+ * intended to equal `ChannelAccount.platform` values; binding a channel to
+ * a concrete account is a persistence-sprint concern. The CO-S6 tracking
+ * preview's `platform` strings are synthetic demo data, not a model.
+ */
+export const V1_PUBLISH_CHANNEL_FIXTURES = ["Instagram", "Telegram", "LinkedIn", "X", "YouTube"] as const;
 export const PUBLISH_MODES = ["PUBLISH_NOW", "SCHEDULE"] as const;
 export const PUBLISH_CHECK_OUTCOMES = ["PUBLISHED_SUCCESSFULLY", "DID_NOT_PUBLISH", "PUBLISHED_WITH_ISSUE"] as const;
 
+/** Section 3 (Sprint 5): the CTA belongs to the Material -- never a
+ * separate Task, never a library. Selected AFTER Material creation, as
+ * the last required part of the authoring task. */
 export const CTA_TYPES = ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "WATCH_YOUTUBE", "NEXT_CONTENT", "RESOURCE", "COMMERCIAL", "CUSTOM"] as const;
 export type CtaType = (typeof CTA_TYPES)[number];
 
@@ -249,6 +259,41 @@ export function setMaterialProduction(
   return {
     ...material,
     shootSessionId: changes.shootSessionId === undefined ? material.shootSessionId : changes.shootSessionId,
+    updatedAt: now(),
+  };
+}
+
+/**
+ * Sprint 7: the Material-level result review. Learning is about the
+ * Material's result, not about one channel publish, so there is exactly one
+ * of these per Material no matter how many channels publish successfully.
+ *
+ * Rules (documented in lib/distribution.ts too):
+ *  - created on the Material's first confirmed successful publish;
+ *  - every later confirmed publish only appends its task id as a source;
+ *  - `resultReviewAt` is the LATEST explicitly confirmed date -- a later
+ *    publish that states a date, or a manual edit, replaces it; a publish
+ *    that leaves the date blank keeps the current one.
+ * Which Learning task (if any) exists is derived from TaskInstances, never
+ * stored here.
+ */
+export interface MaterialResultReview {
+  readonly materialId: string;
+  readonly resultReviewAt: string | null;
+  readonly sourcePublishTaskIds: readonly string[];
+  readonly updatedAt: string;
+}
+
+export function confirmMaterialResultReview(
+  current: MaterialResultReview | undefined,
+  input: { materialId: string; resultReviewAt: string | null; sourceTaskId: string | null },
+  now: () => string = () => new Date().toISOString(),
+): MaterialResultReview {
+  const sources = current?.sourcePublishTaskIds ?? [];
+  return {
+    materialId: input.materialId,
+    resultReviewAt: input.resultReviewAt || current?.resultReviewAt || null,
+    sourcePublishTaskIds: input.sourceTaskId && !sources.includes(input.sourceTaskId) ? [...sources, input.sourceTaskId] : sources,
     updatedAt: now(),
   };
 }

@@ -22,6 +22,7 @@ import {
   getDistributionPlanEligibleMaterials,
   getLearningDue,
   latestLearningSummary,
+  materialResultReviewState,
   reconcileDueRuntimeTasks,
 } from "@/lib/distribution";
 import { SHOOT_TASK_TYPE_NAME, buildShootSession, getReadyForDistribution, getReadyForShootMaterials } from "@/lib/material-production";
@@ -63,9 +64,14 @@ export function MaterialProductionView() {
   }
 
   function reconcile() {
-    const drafts = reconcileDueRuntimeTasks({ now: localNow, instances: runtimeState.instances, taskTypesById }, contentOsState.taskTypes);
+    const drafts = reconcileDueRuntimeTasks({ now: localNow, instances: runtimeState.instances, taskTypesById, content: state }, contentOsState.taskTypes);
     if (drafts.length) createInstances(drafts);
     setNotice(drafts.length ? `${drafts.length} ta muddati kelgan task yaratildi.` : "Muddati kelgan yangi task yo’q.");
+  }
+
+  function setResultReviewAt(materialId: string, resultReviewAt: string) {
+    if (!resultReviewAt) return;
+    contentEntityStore.applyActions([{ type: "CONFIRM_MATERIAL_RESULT_REVIEW", materialId, resultReviewAt, sourceTaskId: null }]);
   }
 
   function toggle(id: string, checked: boolean) {
@@ -131,9 +137,9 @@ export function MaterialProductionView() {
               <div className="flex items-center gap-2"><strong className="flex-1 truncate text-sm text-slate-900">{material.title}</strong><Badge variant="outline" className="text-[10px]">{material.format}</Badge></div>
               <p className="mt-1 text-[11px] text-slate-600">CTA: {material.ctaType ?? "—"}{material.ctaText ? ` — ${material.ctaText}` : ""}</p>
               <p className="text-[11px] text-slate-600">Destination: {destination ? `${destination.name} (${destination.status})` : "—"}</p>
-              {planEligible.has(material.id) ? (
+              {planEligible.has(material.id) && (
                 <Button type="button" size="sm" className="mt-2 h-7 rounded-lg bg-blue-700 text-xs hover:bg-blue-800" onClick={() => createDistributionPlan(material.id)}>Distribution Plan yaratish</Button>
-              ) : <p className="mt-2 text-[10px] text-slate-400">Distribution Plan mavjud.</p>}
+              )}
               {productionTasks.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">{productionTasks.map((t, index) => <Badge key={index} variant="outline" className="text-[10px]">{t.taskType}: {t.status}</Badge>)}</div>
               )}
@@ -155,10 +161,23 @@ export function MaterialProductionView() {
 
         <section className="mx-auto max-w-3xl space-y-3">
           <h2 className="flex items-center gap-2 text-sm font-bold text-slate-950"><BookOpenCheck className="size-4 text-violet-600" /> Learning Due ({learningDue.length})</h2>
+          <p className="text-[11px] text-slate-500">Bitta Material — bitta Learning. Result Review sanasi Material darajasida; keyingi kanallar yangi Learning yaratmaydi.</p>
           {learningDue.map((task) => (
             <div key={task.id} className="rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600"><strong className="text-sm text-slate-900">{task.title}</strong><p className="mt-1">Deadline {task.deadline ?? "—"} · {task.status}</p></div>
           ))}
           {!learningDue.length && <p className="text-xs text-slate-400">Hozircha Learning task yo’q.</p>}
+          {state.materialResultReviews.map((review) => {
+            const material = state.materials.find((m) => m.id === review.materialId);
+            const { learning, due } = materialResultReviewState(review, runtimeState.instances, taskTypesById, localNow);
+            return (
+              <div key={review.materialId} className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600">
+                <strong className="min-w-0 flex-1 truncate text-sm text-slate-900">{material?.title ?? review.materialId}</strong>
+                <span>{review.sourcePublishTaskIds.length} ta muvaffaqiyatli nashr</span>
+                <label className="flex items-center gap-1">Result Review<Input type="date" value={review.resultReviewAt?.slice(0, 10) ?? ""} disabled={Boolean(learning)} onChange={(e) => setResultReviewAt(review.materialId, e.target.value)} className="h-7 w-36 text-xs" /></label>
+                <Badge variant="outline" className="text-[10px]">{learning ? `Learning: ${learning.status}` : due ? "Due — Reconcile bosing" : "Kutilmoqda"}</Badge>
+              </div>
+            );
+          })}
           {learningSummaries.map(({ material, summary }) => summary && (
             <div key={material.id} className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 text-[11px] text-slate-700">
               <strong className="text-sm text-slate-900">{material.title}</strong>

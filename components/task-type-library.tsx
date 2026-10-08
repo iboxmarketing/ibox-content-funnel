@@ -212,7 +212,9 @@ export function TaskTypeLibrary() {
         <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-white p-3 lg:border-b-0 lg:border-r">
           <div className="space-y-2">
             {filtered.map((taskType) => (
-              <button key={taskType.id} type="button" onClick={() => openForEdit(taskType)} className={`w-full rounded-xl border p-3 text-left transition ${selectedId === taskType.id && !draftIsNew ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:border-blue-200"} ${!taskType.isActive ? "opacity-50" : ""}`}>
+              // A div (not <button>): the row contains its own buttons, and
+              // nested <button>s are invalid HTML (Sprint 7 pilot finding).
+              <div key={taskType.id} role="button" tabIndex={0} onClick={() => openForEdit(taskType)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openForEdit(taskType); } }} className={`w-full cursor-pointer rounded-xl border p-3 text-left transition ${selectedId === taskType.id && !draftIsNew ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:border-blue-200"} ${!taskType.isActive ? "opacity-50" : ""}`}>
                 <div className="flex items-center gap-2"><strong className="truncate text-sm font-semibold text-slate-950">{taskType.name}</strong><Badge variant="outline" className="ml-auto shrink-0 text-[9px]">v{taskType.version}</Badge></div>
                 <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{taskType.description}</p>
                 <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-400">
@@ -224,7 +226,7 @@ export function TaskTypeLibrary() {
                   <Button type="button" variant="outline" size="sm" className="h-6 rounded-md px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); duplicate(taskType); }}><Copy className="size-3" /> Nusxa</Button>
                   <Button type="button" variant="outline" size="sm" className="h-6 rounded-md px-2 text-[10px]" onClick={(e) => { e.stopPropagation(); toggleActive(taskType); }}><Power className="size-3" /> {taskType.isActive ? "O'chirish" : "Yoqish"}</Button>
                 </div>
-              </button>
+              </div>
             ))}
             {!filtered.length && <p className="p-4 text-center text-xs text-slate-400">Hech narsa topilmadi.</p>}
           </div>

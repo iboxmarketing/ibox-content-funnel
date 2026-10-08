@@ -9,6 +9,7 @@
  * components/content-entity-store-provider.tsx.
  */
 import {
+  confirmMaterialResultReview,
   setBlogPrimaryLink,
   setBlogState,
   setDestinationStatus,
@@ -32,6 +33,7 @@ import {
   type KnowledgeNodeStatus,
   type CtaType,
   type Material,
+  type MaterialResultReview,
   type MaterialStatus,
   type ShootSession,
   type ShootSessionStatus,
@@ -54,6 +56,8 @@ export interface ContentEntityState {
   readonly repurposeMaps: readonly RepurposeMap[];
   readonly atomicIdeas: readonly AtomicIdea[];
   readonly shootSessions: readonly ShootSession[];
+  /** Sprint 7: one Material-level result review per Material. */
+  readonly materialResultReviews: readonly MaterialResultReview[];
 }
 
 export function initialContentEntityState(): ContentEntityState {
@@ -74,6 +78,7 @@ export function emptyContentEntityState(): ContentEntityState {
     repurposeMaps: [],
     atomicIdeas: [],
     shootSessions: [],
+    materialResultReviews: [],
   };
 }
 
@@ -98,7 +103,10 @@ export type ContentEntityAction =
   | { readonly type: "SET_MATERIAL_CTA"; readonly id: string; readonly ctaType: CtaType; readonly ctaText: string; readonly destinationId: string | null }
   | { readonly type: "SET_MATERIAL_PRODUCTION"; readonly id: string; readonly shootSessionId?: string | null }
   | { readonly type: "ADD_SHOOT_SESSION"; readonly session: ShootSession }
-  | { readonly type: "SET_SHOOT_SESSION_STATUS"; readonly id: string; readonly status: ShootSessionStatus };
+  | { readonly type: "SET_SHOOT_SESSION_STATUS"; readonly id: string; readonly status: ShootSessionStatus }
+  /** A confirmed successful publish (sourceTaskId set) or a manual date
+   * edit (sourceTaskId null). Upserts the Material's one result review. */
+  | { readonly type: "CONFIRM_MATERIAL_RESULT_REVIEW"; readonly materialId: string; readonly resultReviewAt: string | null; readonly sourceTaskId: string | null };
 
 /** Pure. Never mutates `state`. */
 export function contentEntityReducer(state: ContentEntityState, action: ContentEntityAction, now: () => string = () => new Date().toISOString()): ContentEntityState {
@@ -175,12 +183,21 @@ export function contentEntityReducer(state: ContentEntityState, action: ContentE
       if (!current) return state;
       return { ...state, shootSessions: state.shootSessions.map((session) => (session.id === action.id ? setShootSessionStatus(current, action.status, now) : session)) };
     }
+    case "CONFIRM_MATERIAL_RESULT_REVIEW": {
+      const current = state.materialResultReviews.find((review) => review.materialId === action.materialId);
+      const next = confirmMaterialResultReview(current, action, now);
+      return { ...state, materialResultReviews: current ? state.materialResultReviews.map((review) => (review === current ? next : review)) : [...state.materialResultReviews, next] };
+    }
     default:
       return state;
   }
 }
 
 // --- Tree lookups ---
+
+export function materialResultReviewFor(state: ContentEntityState, materialId: string): MaterialResultReview | undefined {
+  return state.materialResultReviews.find((review) => review.materialId === materialId);
+}
 
 export function problemCategoriesForDomain(state: ContentEntityState, domainId: string): readonly ProblemCategory[] {
   return state.problemCategories.filter((category) => category.domainId === domainId);

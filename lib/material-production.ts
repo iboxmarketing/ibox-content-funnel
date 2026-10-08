@@ -24,9 +24,12 @@ import type { ContentEntityAction, ContentEntityState } from "./content-entity-s
 
 // --- CTA (sections 3-5) ---
 
-/** CTA types that never need an exact Destination even when the Atomic
- * Idea flagged `destinationNeeded` (nothing to send people to). */
-export const DESTINATION_FREE_CTA_TYPES: readonly CtaType[] = ["ENGAGEMENT", "FOLLOW"];
+/** CTA types that never point at a Destination entity, even when the
+ * Atomic Idea flagged `destinationNeeded`: engagement/follow have nothing
+ * to send people to, READ_BLOG points at the canonical Blog and
+ * NEXT_CONTENT at another Material (Sprint 7). WATCH_YOUTUBE, RESOURCE,
+ * COMMERCIAL and CUSTOM may point at an exact Destination. */
+export const DESTINATION_FREE_CTA_TYPES: readonly CtaType[] = ["ENGAGEMENT", "FOLLOW", "READ_BLOG", "NEXT_CONTENT"];
 
 export interface MaterialCtaInput {
   readonly ctaType: CtaType | null;
@@ -106,8 +109,11 @@ export function isPlanningComplete(materialId: string, instances: readonly TaskI
   return planning.length > 0 && planning.every((i) => i.status === "DONE");
 }
 
+/** Derived only from the Planning task + Shoot Session link. A Material
+ * that is already READY/PUBLISHED is never offered for a shoot again
+ * (Sprint 7 queue-consistency fix). */
 export function getReadyForShootMaterials(state: ContentEntityState, instances: readonly TaskInstance[], taskTypesById: ReadonlyMap<string, TaskType>): readonly Material[] {
-  return state.materials.filter((m) => !m.shootSessionId && isPlanningComplete(m.id, instances, taskTypesById));
+  return state.materials.filter((m) => !m.shootSessionId && (m.status === "PLANNED" || m.status === "IN_PRODUCTION") && isPlanningComplete(m.id, instances, taskTypesById));
 }
 
 export interface ShootSessionInput {
@@ -183,8 +189,16 @@ export function getReadyForDistribution(
   instances: readonly TaskInstance[],
   taskTypesById: ReadonlyMap<string, TaskType>,
 ): readonly ReadyForDistributionItem[] {
+  // Sprint 7: once a Distribution Plan exists the Material has LEFT this
+  // queue (its channel tasks / Publish Checks carry it from there), so it
+  // is never shown as both "ready for" and "in" distribution.
+  const planned = new Set(
+    instances
+      .filter((i) => i.contentRef?.entityType === "MATERIAL" && i.status !== "CANCELLED" && taskTypesById.get(i.taskTypeId)?.name === DISTRIBUTION_PLAN_TASK_TYPE_NAME)
+      .map((i) => i.contentRef?.entityId),
+  );
   return state.materials
-    .filter((m) => m.status === "READY")
+    .filter((m) => m.status === "READY" && !planned.has(m.id))
     .map((material) => {
       const destination = material.destinationId ? state.destinations.find((d) => d.id === material.destinationId) ?? null : null;
       const productionTasks = isVideoFormat(material.format)
@@ -196,6 +210,10 @@ export function getReadyForDistribution(
       return { material, destination, productionTasks };
     });
 }
+
+/** One Distribution Plan per Material (defined here, re-exported by
+ * distribution.ts, so the queue rule and the plan rule share one name). */
+export const DISTRIBUTION_PLAN_TASK_TYPE_NAME = "Distribution Plan";
 
 /** Task Type that represents a batch Shoot Session (exists in the Task
  * Type library fixtures; looked up by name by the Production Queue UI). */

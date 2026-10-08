@@ -33,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { buildTransferCandidates, destinationFieldsForTaskType, type TransferSelection } from "@/lib/workflow-runtime";
 import { SHARED_TASK_SELECTION_KEY, type CandidateSelectionState, type PreviewCandidate, type PreviewPlan } from "@/lib/content-workflow";
 import type { TaskType } from "@/lib/task-type";
+import { resolveRuntimeHandler } from "@/lib/task-runtime-handlers";
 import { ANGLE_PRIORITIES, ANGLE_USAGES } from "@/lib/content-entity";
 
 interface RowState {
@@ -147,7 +148,11 @@ function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, 
 
       {!createsTask ? (
         <>
-          <label className="mt-2 block text-[11px] font-semibold text-slate-600">Nomi<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+          {"existingEntityId" in candidate && candidate.existingEntityId ? (
+            <p className="mt-2 flex items-center gap-2 text-sm font-semibold text-slate-900"><Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-[10px] text-emerald-700">Mavjud — tanlanadi, dublikat yaratilmaydi</Badge>{candidate.text}</p>
+          ) : (
+            <label className="mt-2 block text-[11px] font-semibold text-slate-600">Nomi<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+          )}
           {candidate.kind === "ANGLE_TO_ANGLES" && (
             <div className="mt-2 grid gap-2 sm:grid-cols-3">
               <label className="text-[11px] font-semibold text-slate-600">Category<Input value={row.category} onChange={(e) => onChange({ category: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
@@ -167,7 +172,7 @@ function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, 
       ) : (
         <>
           <div className="mt-2 grid gap-2 sm:grid-cols-3">
-            <label className="text-[11px] font-semibold text-slate-600">Title<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+            <label className="text-[11px] font-semibold text-slate-600">{candidate.kind === "RESEARCH_TO_BLOGS" ? "Blog nomi" : "Title"}<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
             <label className="text-[11px] font-semibold text-slate-600">Assignee<Input value={row.assignee} onChange={(e) => onChange({ assignee: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} placeholder="Tanlanmagan" /></label>
             <label className="text-[11px] font-semibold text-slate-600">Deadline<Input type="date" value={row.deadline} onChange={(e) => onChange({ deadline: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
           </div>
@@ -195,7 +200,7 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
   const [rows, setRows] = useState<readonly RowState[]>(() => [
     ...plan.candidates.map((candidate) => ({
       key: candidate.key,
-      included: true,
+      included: "defaultIncluded" in candidate ? candidate.defaultIncluded !== false : true,
       title: defaultTitleFor(candidate),
       assignee: defaultAssigneeFor(candidate),
       deadline: "",
@@ -210,7 +215,12 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
     // SHARED_TASK_SELECTION_KEY's doc comment in lib/content-workflow.ts.
     { key: SHARED_TASK_SELECTION_KEY, included: true, title: "", assignee: "", deadline: "", selections: [], category: "", usage: "BOTH", priority: "LATER", publishMode: "SCHEDULE", note: "" },
   ]);
-  const transferCandidates = useMemo(() => buildTransferCandidates(plan.sourceInstance, plan.sourceTaskType), [plan]);
+  // Fields a runtime handler owns internally (ids, flags) are not offered
+  // for context transfer -- only what the employee actually wrote.
+  const transferCandidates = useMemo(() => {
+    const hidden = new Set(resolveRuntimeHandler(plan.sourceTaskType.name).hiddenFieldIds ?? []);
+    return buildTransferCandidates(plan.sourceInstance, plan.sourceTaskType).filter((c) => !hidden.has(c.sourceFieldId));
+  }, [plan]);
 
   function updateRow(key: string, changes: Partial<RowState>) {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...changes } : row)));
