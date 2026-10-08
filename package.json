@@ -31,7 +31,10 @@
     "test:content-os-task-backend-signer": "node --test tests/content-os-task-backend-signer.test.mjs",
     "test:task-backend-service-auth-config": "node --test tests/task-backend-service-auth-config.test.mjs",
     "test:task-client-signed-service": "node --test tests/task-client-signed-service.test.mjs",
-    "test:task-client-signed-service-security": "node --test tests/task-client-signed-service-security.test.mjs"
+    "test:task-client-signed-service-security": "node --test tests/task-client-signed-service-security.test.mjs",
+    "test:task-type": "node --test tests/task-type.test.mjs",
+    "test:workflow-template": "node --test tests/workflow-template.test.mjs",
+    "test:workflow-fixtures": "node --test tests/workflow-fixtures.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

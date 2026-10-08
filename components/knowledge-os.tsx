@@ -15,6 +15,7 @@ import {
   GitBranch,
   LayoutDashboard,
   Layers3,
+  ListChecks,
   Maximize2,
   Network,
   RefreshCw,
@@ -80,7 +81,7 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings";
+type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
@@ -88,11 +89,19 @@ const TopicPackages = dynamic(() => import("@/components/topic-packages").then((
 
 const ProductionSettings = dynamic(() => import("@/components/production-settings").then((module) => module.ProductionSettings), { ssr: false });
 
+// V1 Sprint 1: local/session-only configuration tools. Neither reads Sheet
+// or production data -- they seed from their own fixtures -- so they need
+// none of the loading/setup gating the other views below require.
+const TaskTypeLibrary = dynamic(() => import("@/components/task-type-library").then((module) => module.TaskTypeLibrary), { ssr: false });
+const WorkflowTemplateBuilder = dynamic(() => import("@/components/workflow-template-builder").then((module) => module.WorkflowTemplateBuilder), { ssr: false });
+
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
   { id: "mindmap", label: "Mind Map", icon: Network },
   { id: "packages", label: "Mavzu paketlari", icon: Layers3 },
   { id: "kanban", label: "Content Kanban", icon: Columns3 },
   { id: "calendar", label: "Content Calendar", icon: CalendarDays },
+  { id: "taskTypes", label: "Task Type Library", icon: ListChecks },
+  { id: "workflows", label: "Workflow Builder", icon: GitBranch },
   { id: "settings", label: "Sozlamalar", icon: Settings2 },
 ];
 
@@ -338,8 +347,10 @@ export function KnowledgeOS() {
   }, [loadData]);
 
   useEffect(() => {
-    if (activeView === "mindmap" || activeView === "packages") return;
-    // Load production data only when an operational view is opened.
+    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows") return;
+    // Load production data only when an operational view is opened. Task
+    // Type Library / Workflow Builder are local/session-only config tools
+    // (V1 Sprint 1) and never need Sheet-backed production data.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadProduction();
     const interval = window.setInterval(() => void loadProduction(), 60_000);
@@ -589,7 +600,17 @@ export function KnowledgeOS() {
           </div>
         ) : catalogError ? (
           <div className="flex h-full items-center justify-center bg-slate-50"><div className="max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center"><AlertTriangle className="mx-auto size-6 text-amber-600" /><h2 className="mt-3 font-bold">Catalog preview yuklanmadi</h2><p className="mt-2 text-sm text-slate-500">{catalogError}</p><Button className="mt-4" onClick={() => void loadCatalog(true)}>Qayta urinish</Button></div></div>
-        ) : <LoadingState /> : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
+        ) : <LoadingState /> : activeView === "taskTypes" ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <TaskTypeLibrary />
+          </div>
+        ) : activeView === "workflows" ? (
+          <div className="relative h-full min-h-0">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <WorkflowTemplateBuilder />
+          </div>
+        ) : setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : production && effectiveProduction && productionSchedule && baselineSchedule ? (
           <div className="relative flex h-full min-h-0 flex-col">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
             <div className={`shrink-0 border-b px-5 py-2 text-sm ${simulation ? "border-blue-200 bg-blue-50 text-blue-900" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
