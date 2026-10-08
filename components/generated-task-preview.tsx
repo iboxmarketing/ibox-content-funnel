@@ -2,16 +2,24 @@
 
 /**
  * Generated Preview dialog (V1 Sprint 2, generalized Sprint 3 for
- * multiplicity): renders a `PreviewPlan` from lib/content-workflow.ts.
+ * multiplicity, extended Sprint 4 for Angle/Material format groups):
+ * renders a `PreviewPlan` from lib/content-workflow.ts.
  *
- * One source instance can now preview N candidates of possibly the same
- * Task Type (section 3) -- a plan carries a list of PreviewCandidate, not
- * one fixed shape per step. Four rendering shapes, one per PreviewMode:
- *  - text-candidate modes (Problem Split -> Parts, Knowledge Discovery ->
- *    Nodes): an editable name per line, include/exclude.
- *  - RESEARCH_TO_BLOGS: one row per already-existing, UNPLANNED
- *    KnowledgeNode, each optionally producing its own Blog task + context
- *    transfer from the Research instance.
+ * One source instance can preview N candidates, possibly of different
+ * kinds mixed in the same plan (section 3/4) -- rendering is dispatched
+ * per-candidate by `candidate.kind`, not by the plan's overall mode:
+ *  - PROBLEM_SPLIT_TO_PARTS / KNOWLEDGE_DISCOVERY_TO_NODES: an editable
+ *    name per line, include/exclude, no task created directly.
+ *  - ANGLE_TO_ANGLES: an editable name + simple classification
+ *    (category/usage/priority) per line, no task created directly. A
+ *    plan in this mode may ALSO mix in STEP_FANOUT candidates (e.g.
+ *    Destination Decision, once genuinely unlocked) -- rendered exactly
+ *    like any other STEP_FANOUT row alongside the Angle rows.
+ *  - RESEARCH_TO_BLOGS: one row per existing, UNPLANNED KnowledgeNode,
+ *    each optionally producing its own Blog task + context transfer.
+ *  - MATERIAL_FORMAT_GROUPS (section 15): candidates grouped and
+ *    visually separated by format (Reels / Carousels / Text Posts /
+ *    YouTube), each group with its own shared default deadline.
  *  - STEP_FANOUT: Sprint 2's original one-row-per-generated-step shape.
  *
  * Cancel creates nothing and leaves the source task untouched (still not
@@ -25,6 +33,7 @@ import { Input } from "@/components/ui/input";
 import { buildTransferCandidates, destinationFieldsForTaskType, type TransferSelection } from "@/lib/workflow-runtime";
 import { SHARED_TASK_SELECTION_KEY, type CandidateSelectionState, type PreviewCandidate, type PreviewPlan } from "@/lib/content-workflow";
 import type { TaskType } from "@/lib/task-type";
+import { ANGLE_PRIORITIES, ANGLE_USAGES } from "@/lib/content-entity";
 
 interface RowState {
   readonly key: string;
@@ -33,17 +42,32 @@ interface RowState {
   readonly assignee: string;
   readonly deadline: string;
   readonly selections: readonly TransferSelection[];
+  readonly category: string;
+  readonly usage: string;
+  readonly priority: string;
 }
 
 function defaultTitleFor(candidate: PreviewCandidate): string {
   if (candidate.kind === "STEP_FANOUT") return candidate.step.nameTemplate;
   if (candidate.kind === "RESEARCH_TO_BLOGS") return `${candidate.node.name} — blog`;
+  if (candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA") return `${candidate.atomicIdea.text} — ${candidate.format}`;
   return candidate.text;
 }
 
 function defaultAssigneeFor(candidate: PreviewCandidate): string {
-  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" ? candidate.taskType : undefined;
+  const taskType: TaskType | undefined = candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? candidate.taskType : undefined;
   return taskType?.defaultAssigneeRule.kind === "FIXED_ROLE" ? taskType.defaultAssigneeRule.role : "";
+}
+
+/** Whether this one candidate creates a task directly (title/assignee/
+ * deadline/transfer are meaningful) vs. only an entity (just a name). */
+function candidateCreatesTask(candidate: PreviewCandidate): boolean {
+  return candidate.kind === "RESEARCH_TO_BLOGS" || candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA";
+}
+
+function candidateTaskTypeFor(candidate: PreviewCandidate, planTargetTaskType: TaskType | null): TaskType | null {
+  if (candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA") return candidate.taskType;
+  return planTargetTaskType;
 }
 
 function TransferSection({ transferCandidates, targetTaskType, selections, onChange }: {
@@ -95,6 +119,62 @@ function TransferSection({ transferCandidates, targetTaskType, selections, onCha
   );
 }
 
+function CandidateRow({ candidate, row, planTargetTaskType, transferCandidates, onChange }: {
+  candidate: PreviewCandidate;
+  row: RowState;
+  planTargetTaskType: TaskType | null;
+  transferCandidates: ReturnType<typeof buildTransferCandidates>;
+  onChange: (changes: Partial<RowState>) => void;
+}) {
+  const createsTask = candidateCreatesTask(candidate);
+  const candidateTaskType = candidateTaskTypeFor(candidate, planTargetTaskType);
+
+  return (
+    <div className={`rounded-xl border p-3 transition ${row.included ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
+      <div className="flex items-center gap-2">
+        <input type="checkbox" className="size-4 accent-blue-700" checked={row.included} onChange={(e) => onChange({ included: e.target.checked })} />
+        {candidate.kind === "STEP_FANOUT" && <Badge variant="outline" className="text-[10px]">{candidate.step.blocking ? "blocking" : "non-blocking"}</Badge>}
+        {candidate.kind === "RESEARCH_TO_BLOGS" && <Badge variant="outline" className="text-[10px]">UNPLANNED</Badge>}
+        <strong className="text-sm text-slate-950">
+          {candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" || candidate.kind === "MATERIAL_FROM_ATOMIC_IDEA" ? candidate.taskType.name : null}
+        </strong>
+      </div>
+
+      {!createsTask ? (
+        <>
+          <label className="mt-2 block text-[11px] font-semibold text-slate-600">Nomi<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+          {candidate.kind === "ANGLE_TO_ANGLES" && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <label className="text-[11px] font-semibold text-slate-600">Category<Input value={row.category} onChange={(e) => onChange({ category: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+              <label className="text-[11px] font-semibold text-slate-600">Usage
+                <select value={row.usage} onChange={(e) => onChange({ usage: e.target.value })} disabled={!row.included} className="mt-1 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs">
+                  {ANGLE_USAGES.map((u) => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </label>
+              <label className="text-[11px] font-semibold text-slate-600">Priority
+                <select value={row.priority} onChange={(e) => onChange({ priority: e.target.value })} disabled={!row.included} className="mt-1 h-8 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs">
+                  {ANGLE_PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+              </label>
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+            <label className="text-[11px] font-semibold text-slate-600">Title<Input value={row.title} onChange={(e) => onChange({ title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+            <label className="text-[11px] font-semibold text-slate-600">Assignee<Input value={row.assignee} onChange={(e) => onChange({ assignee: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} placeholder="Tanlanmagan" /></label>
+            <label className="text-[11px] font-semibold text-slate-600">Deadline<Input type="date" value={row.deadline} onChange={(e) => onChange({ deadline: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
+          </div>
+          {row.included && candidateTaskType && <TransferSection transferCandidates={transferCandidates} targetTaskType={candidateTaskType} selections={row.selections} onChange={(selections) => onChange({ selections })} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+const FORMAT_GROUP_LABELS: Record<string, string> = { REEL: "Reels Preview", CAROUSEL: "Carousels Preview", TEXT_POST: "Text Posts Preview", YOUTUBE: "YouTube Preview" };
+
 export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: PreviewPlan; onCancel: () => void; onConfirm: (selections: readonly CandidateSelectionState[]) => void }) {
   const [rows, setRows] = useState<readonly RowState[]>(() => [
     ...plan.candidates.map((candidate) => ({
@@ -104,10 +184,13 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
       assignee: defaultAssigneeFor(candidate),
       deadline: "",
       selections: [],
+      category: "",
+      usage: "BOTH",
+      priority: "LATER",
     })),
     // Always present, always submitted as included -- see
     // SHARED_TASK_SELECTION_KEY's doc comment in lib/content-workflow.ts.
-    { key: SHARED_TASK_SELECTION_KEY, included: true, title: "", assignee: "", deadline: "", selections: [] },
+    { key: SHARED_TASK_SELECTION_KEY, included: true, title: "", assignee: "", deadline: "", selections: [], category: "", usage: "BOTH", priority: "LATER" },
   ]);
   const transferCandidates = useMemo(() => buildTransferCandidates(plan.sourceInstance, plan.sourceTaskType), [plan]);
 
@@ -115,13 +198,31 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...changes } : row)));
   }
 
+  function applyGroupDeadline(keys: readonly string[], deadline: string) {
+    setRows((current) => current.map((row) => (keys.includes(row.key) ? { ...row, deadline } : row)));
+  }
+
   function handleConfirm() {
-    const selections: CandidateSelectionState[] = rows.map((row) => ({ key: row.key, included: row.included, title: row.title, assignee: row.assignee, deadline: row.deadline, selections: row.selections }));
+    const selections: CandidateSelectionState[] = rows.map((row) => ({
+      key: row.key, included: row.included, title: row.title, assignee: row.assignee, deadline: row.deadline, selections: row.selections,
+      category: row.category, usage: row.usage as CandidateSelectionState["usage"], priority: row.priority as CandidateSelectionState["priority"],
+    }));
     onConfirm(selections);
   }
 
-  const isTextMode = plan.mode === "PROBLEM_SPLIT_TO_PARTS" || plan.mode === "KNOWLEDGE_DISCOVERY_TO_NODES";
   const sharedRow = rows.find((r) => r.key === SHARED_TASK_SELECTION_KEY);
+
+  const materialGroups = useMemo(() => {
+    if (plan.mode !== "MATERIAL_FORMAT_GROUPS") return null;
+    const groups = new Map<string, PreviewCandidate[]>();
+    for (const candidate of plan.candidates) {
+      if (candidate.kind !== "MATERIAL_FROM_ATOMIC_IDEA") continue;
+      const list = groups.get(candidate.format) ?? [];
+      list.push(candidate);
+      groups.set(candidate.format, list);
+    }
+    return groups;
+  }, [plan]);
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
@@ -133,42 +234,39 @@ export function GeneratedTaskPreview({ plan, onCancel, onConfirm }: { plan: Prev
           &ldquo;{plan.sourceInstance.title}&rdquo; bajarildi deb belgilanadi. Quyidagilarni ko&apos;rib chiqing, kerak bo&apos;lsa tahrirlang, so&apos;ng Confirm bosing. Faqat tanlanganlar yaratiladi.
         </p>
 
-        <div className="space-y-3">
-          {plan.candidates.map((candidate) => {
-            const row = rows.find((r) => r.key === candidate.key);
-            if (!row) return null;
-            const candidateTaskType = candidate.kind === "STEP_FANOUT" ? candidate.taskType : plan.targetTaskType;
-            return (
-              <div key={candidate.key} className={`rounded-xl border p-3 transition ${row.included ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-60"}`}>
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" className="size-4 accent-blue-700" checked={row.included} onChange={(e) => updateRow(candidate.key, { included: e.target.checked })} />
-                  {candidate.kind === "STEP_FANOUT" && <Badge variant="outline" className="text-[10px]">{candidate.step.blocking ? "blocking" : "non-blocking"}</Badge>}
-                  {candidate.kind === "RESEARCH_TO_BLOGS" && <Badge variant="outline" className="text-[10px]">UNPLANNED</Badge>}
-                  <strong className="text-sm text-slate-950">{candidate.kind === "RESEARCH_TO_BLOGS" ? candidate.node.name : candidate.kind === "STEP_FANOUT" ? candidate.taskType.name : null}</strong>
+        {materialGroups ? (
+          <div className="space-y-5">
+            {[...materialGroups.entries()].map(([format, candidates]) => {
+              const keys = candidates.map((c) => c.key);
+              return (
+                <div key={format} className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-bold text-slate-950">{FORMAT_GROUP_LABELS[format] ?? format}</h3>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">Shared deadline
+                      <Input type="date" onChange={(e) => applyGroupDeadline(keys, e.target.value)} className="h-7 w-36 text-xs" />
+                    </label>
+                  </div>
+                  <div className="space-y-2">
+                    {candidates.map((candidate) => {
+                      const row = rows.find((r) => r.key === candidate.key);
+                      if (!row) return null;
+                      return <CandidateRow key={candidate.key} candidate={candidate} row={row} planTargetTaskType={plan.targetTaskType} transferCandidates={transferCandidates} onChange={(changes) => updateRow(candidate.key, changes)} />;
+                    })}
+                  </div>
                 </div>
-
-                {isTextMode ? (
-                  <label className="mt-2 block text-[11px] font-semibold text-slate-600">Nomi<Input value={row.title} onChange={(e) => updateRow(candidate.key, { title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
-                ) : (
-                  <>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                      <label className="text-[11px] font-semibold text-slate-600">Title<Input value={row.title} onChange={(e) => updateRow(candidate.key, { title: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
-                      <label className="text-[11px] font-semibold text-slate-600">Assignee<Input value={row.assignee} onChange={(e) => updateRow(candidate.key, { assignee: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} placeholder="Tanlanmagan" /></label>
-                      <label className="text-[11px] font-semibold text-slate-600">Deadline<Input type="date" value={row.deadline} onChange={(e) => updateRow(candidate.key, { deadline: e.target.value })} className="mt-1 h-8 text-xs" disabled={!row.included} /></label>
-                    </div>
-                    {row.included && candidate.kind === "RESEARCH_TO_BLOGS" && candidateTaskType && (
-                      <TransferSection transferCandidates={transferCandidates} targetTaskType={candidateTaskType} selections={row.selections} onChange={(selections) => updateRow(candidate.key, { selections })} />
-                    )}
-                    {row.included && candidate.kind === "STEP_FANOUT" && candidateTaskType && (
-                      <TransferSection transferCandidates={transferCandidates} targetTaskType={candidateTaskType} selections={row.selections} onChange={(selections) => updateRow(candidate.key, { selections })} />
-                    )}
-                  </>
-                )}
-              </div>
-            );
-          })}
-          {!plan.candidates.length && <p className="text-sm text-slate-400">Hozircha hech narsa yo&apos;q.</p>}
-        </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {plan.candidates.map((candidate) => {
+              const row = rows.find((r) => r.key === candidate.key);
+              if (!row) return null;
+              return <CandidateRow key={candidate.key} candidate={candidate} row={row} planTargetTaskType={plan.targetTaskType} transferCandidates={transferCandidates} onChange={(changes) => updateRow(candidate.key, changes)} />;
+            })}
+            {!plan.candidates.length && <p className="text-sm text-slate-400">Hozircha hech narsa yo&apos;q.</p>}
+          </div>
+        )}
 
         {plan.mode === "KNOWLEDGE_DISCOVERY_TO_NODES" && plan.targetTaskType && sharedRow && (
           <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">

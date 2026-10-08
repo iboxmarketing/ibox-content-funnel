@@ -23,10 +23,12 @@ const EXPECTED_TASK_TYPE_NAMES = [
   "Performance Consultation", "Destination Decision", "Repurpose Map", "Reel Script", "Carousel",
   "Text Post", "Planning", "Shoot", "Edit", "Cover", "Caption", "Distribution Plan",
   "Publish / Schedule", "Publish Check", "Learning",
+  // V1 Sprint 4
+  "YouTube", "YouTube Outline", "Checklist / PDF Creation", "External Tool Setup",
 ];
 
-test("all 22 approved Task Type fixtures exist, by name, exactly once each", () => {
-  assert.equal(TASK_TYPE_FIXTURES.length, 22);
+test("all 26 approved Task Type fixtures exist, by name, exactly once each", () => {
+  assert.equal(TASK_TYPE_FIXTURES.length, 26);
   const names = TASK_TYPE_FIXTURES.map((t) => t.name);
   assert.deepEqual(names.slice().sort(), EXPECTED_TASK_TYPE_NAMES.slice().sort());
   assert.equal(new Set(names).size, names.length, "no duplicate names");
@@ -87,19 +89,32 @@ test("Blog branches to Head Review, SEO, Angle, and Performance Consultation, ea
   }
 });
 
-test("Head Review is blocking; SEO, Angle, and Performance Consultation are non-blocking", () => {
-  const blocking = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith("Head Review"));
-  assert.equal(blocking.blocking, true);
-  for (const name of ["SEO", "Angle", "Performance Consultation"]) {
+test("Head Review, Angle, and Performance Consultation are blocking; SEO is not (V1 Sprint 4: Destination Decision depends on Angle+Performance Consultation)", () => {
+  for (const name of ["Head Review", "Angle", "Performance Consultation"]) {
     const step = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith(name));
-    assert.equal(step.blocking, false, name);
+    assert.equal(step.blocking, true, name);
   }
+  const seo = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith("SEO"));
+  assert.equal(seo.blocking, false);
 });
 
-test("Repurpose Map is modeled as depending on Head Review (not merely Blog) -- configuration only, not runtime-generated", () => {
+test("Destination Decision depends on Blog + Angle + Performance Consultation, explicitly not SEO", () => {
+  const byName = (name) => QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith(name));
+  const blog = byName("Blog");
+  const angle = byName("Angle");
+  const performance = byName("Performance Consultation");
+  const seo = byName("SEO");
+  const destinationDecision = byName("Destination Decision");
+  assert.deepEqual(destinationDecision.dependsOn.slice().sort(), [blog.id, angle.id, performance.id].sort());
+  assert.ok(!destinationDecision.dependsOn.includes(seo.id));
+  assert.equal(destinationDecision.blocking, true);
+});
+
+test("Repurpose Map depends on BOTH Head Review and Destination Decision -- configuration only, not runtime-generated", () => {
   const headReview = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith("Head Review"));
+  const destinationDecision = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith("Destination Decision"));
   const repurpose = QOLDIQ_NOTOGRI_WORKFLOW_FIXTURE.steps.find((s) => s.nameTemplate.endsWith("Repurpose Map"));
-  assert.deepEqual(repurpose.dependsOn, [headReview.id]);
+  assert.deepEqual(repurpose.dependsOn.slice().sort(), [headReview.id, destinationDecision.id].sort());
 });
 
 test("every step in the fixture references a real, active Task Type fixture", () => {

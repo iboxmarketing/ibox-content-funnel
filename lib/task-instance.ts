@@ -20,7 +20,7 @@
  */
 import type { FieldDefinition, FieldType } from "./task-type";
 import type { TaskLink } from "./task-link";
-import type { ContentEntityRef } from "./content-entity";
+import type { AtomicIdeaCoverageType, AtomicIdeaDecision, ContentEntityRef, MaterialFormat } from "./content-entity";
 
 export const TASK_INSTANCE_STATUSES = ["ASSIGNED", "IN_PROGRESS", "BLOCKED", "REVIEW", "REVISION", "DONE", "CANCELLED"] as const;
 export type TaskInstanceStatus = (typeof TASK_INSTANCE_STATUSES)[number];
@@ -52,6 +52,26 @@ export interface TemplateImprovementSuggestion {
   readonly createdAt: string;
 }
 
+/**
+ * A Repurpose Map AtomicIdea's in-progress, pre-confirmation state (V1
+ * Sprint 4): the employee builds this list directly inside the open
+ * Repurpose Map task (same spot as customFields/links -- a dedicated
+ * typed array on TaskInstance, not squeezed into the restrictive
+ * `FieldValue` union). Minimum Coverage Validation (section 13) reads
+ * this list at Complete time; once Complete succeeds, each draft becomes
+ * one real `AtomicIdea` content entity (see content-workflow.ts). No
+ * Treatment field, no Format Fit scoring (deliberately not built).
+ */
+export interface AtomicIdeaDraft {
+  readonly id: string;
+  readonly text: string;
+  readonly coverageType: AtomicIdeaCoverageType;
+  readonly decision: AtomicIdeaDecision;
+  readonly selectedFormats: readonly MaterialFormat[];
+  readonly angleId: string | null;
+  readonly destinationNeeded: boolean;
+}
+
 export interface TaskInstance {
   readonly id: string;
   readonly taskTypeId: string;
@@ -78,6 +98,9 @@ export interface TaskInstance {
    * them, not just one. Every other Task Type leaves this empty and uses
    * `contentRef` alone. */
   readonly relatedEntityRefs: readonly ContentEntityRef[];
+  /** Only ever populated on a "Repurpose Map" task; empty for every
+   * other Task Type. See AtomicIdeaDraft's doc comment. */
+  readonly atomicIdeaDrafts: readonly AtomicIdeaDraft[];
   readonly skipReason: string | null;
   /** null while still open; set exactly once, when the instance leaves
    * ASSIGNED/IN_PROGRESS/BLOCKED/REVIEW/REVISION via Complete or Skip. */
@@ -93,11 +116,12 @@ export interface TaskInstance {
  * null/empty for any task not yet wired to the content entity model. */
 export type TaskInstanceDraft = Omit<
   TaskInstance,
-  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt" | "contentRef" | "relatedEntityRefs"
+  "id" | "status" | "outcome" | "skipReason" | "fieldProvenance" | "createdAt" | "updatedAt" | "contentRef" | "relatedEntityRefs" | "atomicIdeaDrafts"
 > & {
   readonly fieldProvenance?: readonly FieldProvenance[];
   readonly contentRef?: ContentEntityRef | null;
   readonly relatedEntityRefs?: readonly ContentEntityRef[];
+  readonly atomicIdeaDrafts?: readonly AtomicIdeaDraft[];
 };
 
 function stableInstanceId(now: () => string): string {
@@ -111,6 +135,7 @@ export function createTaskInstance(draft: TaskInstanceDraft, now: () => string =
     fieldProvenance: draft.fieldProvenance ?? [],
     contentRef: draft.contentRef ?? null,
     relatedEntityRefs: draft.relatedEntityRefs ?? [],
+    atomicIdeaDrafts: draft.atomicIdeaDrafts ?? [],
     id: stableInstanceId(now),
     status: "ASSIGNED",
     outcome: null,
@@ -141,6 +166,26 @@ export function removeCustomFieldFromInstance(instance: TaskInstance, fieldId: s
   const remainingValues = { ...instance.fieldValues };
   delete remainingValues[fieldId];
   return { ...instance, customFields: instance.customFields.filter((field) => field.id !== fieldId), fieldValues: remainingValues, updatedAt: now() };
+}
+
+function newAtomicIdeaDraftId(): string {
+  return `idea-draft-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export function emptyAtomicIdeaDraft(): AtomicIdeaDraft {
+  return { id: newAtomicIdeaDraftId(), text: "", coverageType: "OTHER", decision: "LATER", selectedFormats: [], angleId: null, destinationNeeded: false };
+}
+
+export function addAtomicIdeaDraft(instance: TaskInstance, draft: AtomicIdeaDraft, now: () => string = () => new Date().toISOString()): TaskInstance {
+  return { ...instance, atomicIdeaDrafts: [...instance.atomicIdeaDrafts, draft], updatedAt: now() };
+}
+
+export function updateAtomicIdeaDraft(instance: TaskInstance, draftId: string, changes: Partial<Omit<AtomicIdeaDraft, "id">>, now: () => string = () => new Date().toISOString()): TaskInstance {
+  return { ...instance, atomicIdeaDrafts: instance.atomicIdeaDrafts.map((draft) => (draft.id === draftId ? { ...draft, ...changes } : draft)), updatedAt: now() };
+}
+
+export function removeAtomicIdeaDraft(instance: TaskInstance, draftId: string, now: () => string = () => new Date().toISOString()): TaskInstance {
+  return { ...instance, atomicIdeaDrafts: instance.atomicIdeaDrafts.filter((draft) => draft.id !== draftId), updatedAt: now() };
 }
 
 /** Section 12: when a transferred value is edited, the caller decides
@@ -253,6 +298,35 @@ export function validateTaskInstanceForCompletion(instance: TaskInstance, requir
 
 export function canCompleteTaskInstance(instance: TaskInstance, requiredFields: readonly FieldDefinition[]): boolean {
   return validateTaskInstanceForCompletion(instance, requiredFields).length === 0;
+}
+
+/**
+ * Section 3: completing the Angle task normally requires at least
+ * `minimum` non-empty candidate lines in its free-text field (more are
+ * always allowed -- this never caps the count). Only applies to a normal
+ * Complete; the global Skip path never runs this (skip has no "minimum
+ * output" concept, by design).
+ */
+export function validateMinimumCandidateLines(fieldValue: FieldValue, minimum: number, fieldLabel: string): CompletionValidationError[] {
+  const lineCount = typeof fieldValue === "string" ? fieldValue.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).length : 0;
+  if (lineCount >= minimum) return [];
+  return [{ code: "MISSING_REQUIRED_FIELD", message: `"${fieldLabel}" uchun kamida ${minimum} ta qator kerak (hozir ${lineCount} ta).` }];
+}
+
+/**
+ * Section 13: when completing Repurpose Map normally, every CREATE_CONTENT
+ * atomic idea decision together must cover all four of PROBLEM / CAUSE /
+ * CONSEQUENCE / SOLUTION at least once. Not every idea needs to become
+ * content -- only the ones already marked CREATE_CONTENT are checked.
+ * The global Skip path (skipping the whole Repurpose Map task) never runs
+ * this -- there is no second, Repurpose-specific skip system.
+ */
+export function validateAtomicIdeaCoverage(drafts: readonly AtomicIdeaDraft[]): CompletionValidationError[] {
+  const covered = new Set(drafts.filter((d) => d.decision === "CREATE_CONTENT").map((d) => d.coverageType));
+  const required: AtomicIdeaCoverageType[] = ["PROBLEM", "CAUSE", "CONSEQUENCE", "SOLUTION"];
+  const missing = required.filter((type) => !covered.has(type));
+  if (!missing.length) return [];
+  return [{ code: "MISSING_REQUIRED_FIELD", message: `CREATE_CONTENT deb belgilangan g'oyalar quyidagi coverage turlarini qoplamaydi: ${missing.join(", ")}.` }];
 }
 
 // --- "Suggest as template improvement" (section 5) ---

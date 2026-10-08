@@ -151,3 +151,15 @@ test("an action targeting an unknown instanceId is a no-op", () => {
   const next = taskRuntimeReducer(state, { type: "COMPLETE", instanceId: "does-not-exist" }, fixedNow);
   assert.equal(next, state);
 });
+
+test("ADD_ATOMIC_IDEA_DRAFT / UPDATE_ATOMIC_IDEA_DRAFT / REMOVE_ATOMIC_IDEA_DRAFT manage Repurpose Map's draft list", () => {
+  let state = addInstances(initialTaskRuntimeState(), [draft()]);
+  const id = state.instances[0].id;
+  const atomicDraft = { id: "d1", text: "Muammo nima?", coverageType: "PROBLEM", decision: "CREATE_CONTENT", selectedFormats: ["REEL"], angleId: null, destinationNeeded: false };
+  state = taskRuntimeReducer(state, { type: "ADD_ATOMIC_IDEA_DRAFT", instanceId: id, draft: atomicDraft }, fixedNow);
+  assert.equal(instanceById(state, id).atomicIdeaDrafts.length, 1);
+  state = taskRuntimeReducer(state, { type: "UPDATE_ATOMIC_IDEA_DRAFT", instanceId: id, draftId: "d1", changes: { decision: "LATER" } }, fixedNow);
+  assert.equal(instanceById(state, id).atomicIdeaDrafts[0].decision, "LATER");
+  state = taskRuntimeReducer(state, { type: "REMOVE_ATOMIC_IDEA_DRAFT", instanceId: id, draftId: "d1" }, fixedNow);
+  assert.equal(instanceById(state, id).atomicIdeaDrafts.length, 0);
+});

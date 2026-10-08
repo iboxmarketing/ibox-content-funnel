@@ -28,6 +28,12 @@ const {
   canCompleteTaskInstance,
   createTemplateImprovementSuggestion,
   emptyCustomField,
+  emptyAtomicIdeaDraft,
+  addAtomicIdeaDraft,
+  updateAtomicIdeaDraft,
+  removeAtomicIdeaDraft,
+  validateMinimumCandidateLines,
+  validateAtomicIdeaCoverage,
 } = require(join(dir, "task-instance.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -231,4 +237,63 @@ test("editTransferredFieldValue only updates the target instance -- writing the 
   const instance = createTaskInstance(baseDraft(), fixedNow);
   const edited = editTransferredFieldValue(instance, "f-text", "new value", fixedNow);
   assert.equal(edited.fieldValues["f-text"], "new value");
+});
+
+// --- Angle minimum-candidate-count (section 3) ---
+
+test("validateMinimumCandidateLines requires at least the minimum count, but allows more", () => {
+  assert.equal(validateMinimumCandidateLines("a\nb\nc\nd", 5, "Angles").length, 1);
+  assert.equal(validateMinimumCandidateLines("a\nb\nc\nd\ne", 5, "Angles").length, 0);
+  assert.equal(validateMinimumCandidateLines("a\nb\nc\nd\ne\nf\ng", 5, "Angles").length, 0, "more than the minimum is allowed");
+  assert.equal(validateMinimumCandidateLines(null, 5, "Angles").length, 1);
+});
+
+// --- Repurpose Map AtomicIdeaDraft authoring + coverage validation (sections 12-13) ---
+
+test("AtomicIdeaDraft CRUD is instance-scoped, same pattern as customFields", () => {
+  let instance = createTaskInstance(baseDraft(), fixedNow);
+  const draft = { ...emptyAtomicIdeaDraft(), text: "Muammo nima?", coverageType: "PROBLEM", decision: "CREATE_CONTENT" };
+  instance = addAtomicIdeaDraft(instance, draft, fixedNow);
+  assert.equal(instance.atomicIdeaDrafts.length, 1);
+  instance = updateAtomicIdeaDraft(instance, draft.id, { selectedFormats: ["REEL", "CAROUSEL"] }, fixedNow);
+  assert.deepEqual(instance.atomicIdeaDrafts[0].selectedFormats, ["REEL", "CAROUSEL"]);
+  instance = removeAtomicIdeaDraft(instance, draft.id, fixedNow);
+  assert.equal(instance.atomicIdeaDrafts.length, 0);
+});
+
+test("emptyAtomicIdeaDraft defaults to decision LATER and no formats -- an idea does not become content by default", () => {
+  const draft = emptyAtomicIdeaDraft();
+  assert.equal(draft.decision, "LATER");
+  assert.deepEqual(draft.selectedFormats, []);
+  assert.equal(draft.angleId, null);
+  assert.equal(draft.destinationNeeded, false);
+});
+
+function idea(coverageType, decision) {
+  return { ...emptyAtomicIdeaDraft(), text: coverageType, coverageType, decision };
+}
+
+test("validateAtomicIdeaCoverage requires PROBLEM/CAUSE/CONSEQUENCE/SOLUTION among CREATE_CONTENT ideas only", () => {
+  const incomplete = [idea("PROBLEM", "CREATE_CONTENT"), idea("CAUSE", "CREATE_CONTENT")];
+  assert.equal(validateAtomicIdeaCoverage(incomplete).length, 1);
+
+  const complete = [idea("PROBLEM", "CREATE_CONTENT"), idea("CAUSE", "CREATE_CONTENT"), idea("CONSEQUENCE", "CREATE_CONTENT"), idea("SOLUTION", "CREATE_CONTENT")];
+  assert.deepEqual(validateAtomicIdeaCoverage(complete), []);
+});
+
+test("validateAtomicIdeaCoverage ignores BLOG_ONLY/LATER ideas -- not every idea needs to become content", () => {
+  const drafts = [
+    idea("PROBLEM", "CREATE_CONTENT"),
+    idea("CAUSE", "CREATE_CONTENT"),
+    idea("CONSEQUENCE", "CREATE_CONTENT"),
+    idea("SOLUTION", "CREATE_CONTENT"),
+    idea("OTHER", "BLOG_ONLY"),
+    idea("OTHER", "LATER"),
+  ];
+  assert.deepEqual(validateAtomicIdeaCoverage(drafts), []);
+});
+
+test("validateAtomicIdeaCoverage with zero CREATE_CONTENT ideas fails on all four types", () => {
+  const drafts = [idea("PROBLEM", "LATER"), idea("CAUSE", "BLOG_ONLY")];
+  assert.equal(validateAtomicIdeaCoverage(drafts).length, 1);
 });

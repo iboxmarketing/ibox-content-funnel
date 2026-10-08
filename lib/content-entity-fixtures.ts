@@ -1,9 +1,12 @@
 /**
- * Seed Content Entity fixture for V1 Sprint 3's demo path: enough to show
- * the real hierarchy and a one-to-many flow, not a full taxonomy (per
- * instruction: "Do not seed hundreds of nodes").
+ * Seed Content Entity fixture for V1 Sprint 3/4's demo path: enough to
+ * show the real hierarchy and a one-to-many flow, not a full taxonomy
+ * (per instruction: "Do not seed hundreds of nodes"). Sprint 4 adds one
+ * optional pre-existing Destination (section 23's "Qoldiq audit
+ * checklist") so the Destination Decision reuse path has something real
+ * to reuse in the demo.
  */
-import { createDomain, createKnowledgeNode, createProblemCategory, createProblemPart } from "./content-entity";
+import { createDestination, createDomain, createKnowledgeNode, createProblemCategory, createProblemPart } from "./content-entity";
 import type { ContentEntityState } from "./content-entity-store";
 
 const FIXTURE_EPOCH_MS = Date.UTC(2026, 9, 9);
@@ -36,6 +39,10 @@ const knowledgeNodes = [
   createKnowledgeNode(hisobdaKam.id, "Omborchi skanerlamagan chiqim", null, now),
 ];
 
+const destinations = [
+  createDestination({ problemCategoryId: problemCategory.id, name: "Qoldiq audit checklist", type: "CHECKLIST_OR_PDF", valueProposition: "Bepul diagnostika/checklist orqali qoldiq farqini tekshirish", owner: "Digital marketer" }, now),
+];
+
 export const QOLDIQ_CONTENT_ENTITY_FIXTURE: ContentEntityState = {
   domains: [domain],
   problemCategories: [problemCategory],
@@ -43,4 +50,9 @@ export const QOLDIQ_CONTENT_ENTITY_FIXTURE: ContentEntityState = {
   knowledgeNodes,
   blogs: [],
   materials: [],
+  angles: [],
+  destinations,
+  angleDestinationLinks: [],
+  repurposeMaps: [],
+  atomicIdeas: [],
 };

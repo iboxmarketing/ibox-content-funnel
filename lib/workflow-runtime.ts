@@ -21,6 +21,18 @@
  * ancestor chain (via `sourceTaskId`), so a sibling instance of the same
  * step (e.g. a second, unrelated Research task) never affects this
  * computation.
+ *
+ * Sprint 4 (section 11) adds one more convergence shape: a step can
+ * depend on several SIBLING branches of the same content entity at once
+ * (e.g. Destination Decision waits on Blog + Angle + Performance
+ * Consultation, which are three siblings generated from one Blog, not
+ * ancestors of each other or of a common step). Plain ancestor-lineage
+ * walking can't see a sibling. Resolved via `contentRef` equality
+ * instead: every STEP_FANOUT-generated descendant of one Blog inherits
+ * that Blog's exact `contentRef` unchanged (see content-workflow.ts), so
+ * "a settled instance of step D sharing sourceInstance's contentRef"
+ * reliably identifies "the one from the same Blog branch" without ever
+ * falling back to "any instance of D anywhere".
  */
 import { isTaskInstanceSettled, type FieldValue, type TaskInstance } from "./task-instance";
 import type { WorkflowStep, WorkflowTemplate } from "./workflow-template";
@@ -66,6 +78,10 @@ function ancestorChain(instance: TaskInstance, allInstances: readonly TaskInstan
  * This never surfaces anything beyond one hop, and never treats "some
  * other instance of this step is done" as satisfying a dependency.
  */
+function contentRefsEqual(a: ContentEntityRef | null, b: ContentEntityRef | null): boolean {
+  return a !== null && b !== null && a.entityType === b.entityType && a.entityId === b.entityId;
+}
+
 export function getStepsGeneratedBy(
   template: WorkflowTemplate,
   allInstances: readonly TaskInstance[],
@@ -78,12 +94,20 @@ export function getStepsGeneratedBy(
     chain.filter(isTaskInstanceSettled).map((i) => i.workflowStepId).filter((id): id is string => Boolean(id)),
   );
 
+  function isSettledForThisBranch(stepId: string): boolean {
+    if (settledStepIdsInLineage.has(stepId)) return true;
+    if (!sourceInstance.contentRef) return false;
+    return allInstances.some(
+      (instance) => instance.workflowStepId === stepId && isTaskInstanceSettled(instance) && contentRefsEqual(instance.contentRef, sourceInstance.contentRef),
+    );
+  }
+
   return template.steps.filter((step) => {
     if (!step.dependsOn.includes(sourceInstance.workflowStepId as string)) return false;
     return step.dependsOn.every((dependencyId) => {
       const dependencyStep = stepsById.get(dependencyId);
       if (!dependencyStep?.blocking) return true;
-      return settledStepIdsInLineage.has(dependencyId);
+      return isSettledForThisBranch(dependencyId);
     });
   });
 }
@@ -92,8 +116,11 @@ export function getStepsGeneratedBy(
 
 export interface TaskInstanceSeed {
   readonly taskTypeId: string;
-  readonly workflowTemplateId: string;
-  readonly workflowStepId: string;
+  /** null for a standalone task not governed by any WorkflowTemplate --
+   * see buildStandaloneTaskInstanceSeed (section 9: Destination-creation
+   * tasks aren't part of the content WorkflowTemplate graph). */
+  readonly workflowTemplateId: string | null;
+  readonly workflowStepId: string | null;
   readonly title: string;
   readonly assignee: string | null;
   readonly deadline: string | null;
@@ -134,6 +161,29 @@ export function buildTaskInstanceSeed(
     sourceTaskId,
     contentRef,
     relatedEntityRefs,
+  };
+}
+
+/** Section 9: the first local Destination-creation task. Destinations
+ * aren't part of any WorkflowTemplate's step graph (section 1: "Do not
+ * build every destination workflow chain yet"), so this task has no
+ * WorkflowStep/WorkflowTemplate at all -- it completes directly, with no
+ * further fanout, exactly like any other task whose `workflowStepId` is
+ * null (see workflow-run-view.tsx's existing handling of that case). */
+export function buildStandaloneTaskInstanceSeed(taskType: TaskType, title: string, sourceTaskId: string | null, contentRef: ContentEntityRef | null = null): TaskInstanceSeed {
+  return {
+    taskTypeId: taskType.id,
+    workflowTemplateId: null,
+    workflowStepId: null,
+    title,
+    assignee: placeholderAssignee(taskType),
+    deadline: null,
+    fieldValues: {},
+    customFields: [],
+    links: [],
+    sourceTaskId,
+    contentRef,
+    relatedEntityRefs: [],
   };
 }
 

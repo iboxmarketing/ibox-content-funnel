@@ -45,7 +45,7 @@ function baseTaskTypeDraft(overrides = {}) {
 
 test("initialContentOsState seeds from the Sprint 1 fixtures", () => {
   const state = initialContentOsState();
-  assert.equal(state.taskTypes.length, 22);
+  assert.equal(state.taskTypes.length, 26);
   assert.equal(state.workflowTemplates.length, 1);
 });
 
@@ -53,7 +53,7 @@ test("ADD_TASK_TYPE adds an already-built task type, visible immediately in stat
   const state = initialContentOsState();
   const taskType = createTaskType(baseTaskTypeDraft(), fixedNow);
   const next = contentOsReducer(state, { type: "ADD_TASK_TYPE", taskType }, fixedNow);
-  assert.equal(next.taskTypes.length, 23);
+  assert.equal(next.taskTypes.length, 27);
   assert.ok(next.taskTypes.some((t) => t.name === "Qualitative Check"));
   assert.notEqual(next, state, "reducer must not mutate in place");
 });
@@ -84,7 +84,7 @@ test("duplicating a task type (building via lib/task-type.ts, then ADD_TASK_TYPE
   const blog = state.taskTypes.find((t) => t.name === "Blog");
   const copy = duplicateTaskType(blog, fixedNow);
   const next = contentOsReducer(state, { type: "ADD_TASK_TYPE", taskType: copy }, fixedNow);
-  assert.equal(next.taskTypes.length, 23);
+  assert.equal(next.taskTypes.length, 27);
   assert.equal(taskTypeById(next, copy.id).version, 1);
 });
 
@@ -93,7 +93,7 @@ test("SET_TASK_TYPE_ACTIVE toggles isActive", () => {
   const blog = state.taskTypes.find((t) => t.name === "Blog");
   const next = contentOsReducer(state, { type: "SET_TASK_TYPE_ACTIVE", id: blog.id, isActive: false }, fixedNow);
   assert.equal(taskTypeById(next, blog.id).isActive, false);
-  assert.equal(activeTaskTypes(next).length, 21);
+  assert.equal(activeTaskTypes(next).length, 25);
 });
 
 test("ADD_WORKFLOW_TEMPLATE / ADD_WORKFLOW_STEP / UPDATE_WORKFLOW_STEP / REMOVE_WORKFLOW_STEP all operate on shared state", () => {

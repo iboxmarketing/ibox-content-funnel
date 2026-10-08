@@ -1,10 +1,18 @@
 /**
  * First workflow fixture: a deliberately partial example for the
  * "Qoldiq noto'g'ri" problem category -- Problem Split through Blog, plus
- * Blog's parallel branches. This does not model the whole final production
- * flow (per sprint instruction); Repurpose Map is included only to show
- * the "blocking on Head Review" relationship in configuration, not as a
- * runtime-generated step.
+ * Blog's parallel branches, through the Sprint 4 content-decision layer
+ * (Destination Decision, Repurpose Map). This does not model the whole
+ * final production chain (Reel/Carousel/Text Post/YouTube themselves stay
+ * outside this WorkflowTemplate -- they're generated directly from a
+ * confirmed format preview, not from a template step; see
+ * content-workflow.ts).
+ *
+ * Sprint 4 (section 11): Destination Decision waits on Blog + Angle +
+ * Performance Consultation (not SEO), so Angle and Performance
+ * Consultation now need `blocking: true` -- Destination Decision is the
+ * first real dependent either of them has. Repurpose Map now waits on
+ * BOTH Head Review and Destination Decision.
  */
 import { addStep, createWorkflowTemplate, type WorkflowTemplate } from "./workflow-template";
 import { findTaskTypeFixtureByName } from "./task-type-fixtures";
@@ -68,9 +76,9 @@ function buildQoldiqNotogriWorkflow(): WorkflowTemplate {
   }, now);
   const blogId = template.steps[3].id;
 
-  // Blog follow-up: Head Review blocks future Repurpose; SEO/Angle/
-  // Performance Consultation do not wait for Head Review -- all three
-  // depend only on Blog, matching the spec's BLOG FOLLOW-UP rules exactly.
+  // Blog follow-up: Head Review blocks future Repurpose; SEO never blocks
+  // anything; Angle and Performance Consultation feed Destination
+  // Decision (section 11), so they must block it.
   template = addStep(template, {
     taskTypeId: taskTypeId("Head Review"),
     nameTemplate: "Qoldiq noto'g'ri — Head Review",
@@ -92,28 +100,37 @@ function buildQoldiqNotogriWorkflow(): WorkflowTemplate {
     taskTypeId: taskTypeId("Angle"),
     nameTemplate: "Qoldiq noto'g'ri — Angle",
     dependsOn: [blogId],
-    blocking: false,
+    blocking: true,
     skippable: true,
   }, now);
+  const angleId = template.steps[6].id;
 
   template = addStep(template, {
     taskTypeId: taskTypeId("Performance Consultation"),
     nameTemplate: "Qoldiq noto'g'ri — Performance Consultation",
     dependsOn: [blogId],
-    blocking: false,
+    blocking: true,
     skippable: true,
   }, now);
+  const performanceConsultationId = template.steps[7].id;
 
-  // Modeled in configuration only, per instruction -- Repurpose Map is not
-  // runtime-generated this sprint. It depends on Head Review (not merely
-  // Blog), matching "Repurpose Map cannot start until the Blog is
-  // Head-approved." Nothing currently depends on this step, so it is
-  // marked non-blocking (blocking:true with no dependents is flagged by
-  // validateWorkflowTemplate as a likely mistake).
+  // Destination Decision (section 7): waits on Blog + Angle + Performance
+  // Consultation -- explicitly does NOT depend on SEO.
+  template = addStep(template, {
+    taskTypeId: taskTypeId("Destination Decision"),
+    nameTemplate: "Qoldiq noto'g'ri — Destination Decision",
+    dependsOn: [blogId, angleId, performanceConsultationId],
+    blocking: true,
+    skippable: false,
+  }, now);
+  const destinationDecisionId = template.steps[8].id;
+
+  // Repurpose Map (section 11): eligible only once Head Review AND
+  // Destination Decision have both settled.
   template = addStep(template, {
     taskTypeId: taskTypeId("Repurpose Map"),
     nameTemplate: "Qoldiq noto'g'ri — Repurpose Map",
-    dependsOn: [headReviewId],
+    dependsOn: [headReviewId, destinationDecisionId],
     blocking: false,
     skippable: true,
   }, now);

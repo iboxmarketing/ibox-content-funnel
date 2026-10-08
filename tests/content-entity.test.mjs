@@ -22,6 +22,15 @@ const {
   createBlog,
   setBlogState,
   createMaterial,
+  setMaterialStatus,
+  setMaterialDestination,
+  createAngle,
+  createDestination,
+  setDestinationStatus,
+  isDestinationReadyForPublish,
+  createAngleDestinationLink,
+  createRepurposeMap,
+  createAtomicIdea,
 } = require(join(dir, "content-entity.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -68,11 +77,96 @@ test("setBlogState transitions state and is a no-op when unchanged", () => {
 });
 
 test("createMaterial establishes the minimal Repurpose entity boundary without a production chain", () => {
-  const material = createMaterial({ blogId: "blog-1", title: "Reel: atomic idea", format: "REEL", primaryAtomicIdea: "Qaytgan tovar muammosi" }, fixedNow);
+  const material = createMaterial({ blogId: "blog-1", title: "Reel: atomic idea", format: "REEL", primaryAtomicIdeaId: "idea-1" }, fixedNow);
   assert.equal(material.blogId, "blog-1");
   assert.equal(material.format, "REEL");
   assert.equal(material.status, "PLANNED");
-  assert.equal(material.primaryAtomicIdea, "Qaytgan tovar muammosi");
+  assert.equal(material.primaryAtomicIdeaId, "idea-1");
+  assert.equal(material.angleId, null);
+  assert.equal(material.destinationNeeded, false);
+  assert.equal(material.destinationId, null);
+});
+
+test("createMaterial honors angle/destination relations when provided", () => {
+  const material = createMaterial({ blogId: "blog-1", title: "Carousel", format: "CAROUSEL", primaryAtomicIdeaId: "idea-1", angleId: "angle-1", destinationNeeded: true }, fixedNow);
+  assert.equal(material.angleId, "angle-1");
+  assert.equal(material.destinationNeeded, true);
+  assert.equal(material.destinationId, null, "exact destination is never forced at Material creation time");
+});
+
+test("setMaterialStatus / setMaterialDestination update one material", () => {
+  const material = createMaterial({ blogId: "blog-1", title: "Carousel", format: "CAROUSEL", primaryAtomicIdeaId: "idea-1" }, fixedNow);
+  assert.equal(setMaterialStatus(material, "PLANNED", fixedNow), material);
+  const inProduction = setMaterialStatus(material, "IN_PRODUCTION", fixedNow);
+  assert.equal(inProduction.status, "IN_PRODUCTION");
+  const withDestination = setMaterialDestination(material, "dest-1", fixedNow);
+  assert.equal(withDestination.destinationId, "dest-1");
+});
+
+// --- Angle (local to one KnowledgeNode, never a global library) ---
+
+test("createAngle belongs to exactly one KnowledgeNode and defaults its classification fields", () => {
+  const angle = createAngle("node-1", { title: "Ortiqcha xarid" }, "ti-angle-1", fixedNow);
+  assert.equal(angle.knowledgeNodeId, "node-1");
+  assert.equal(angle.title, "Ortiqcha xarid");
+  assert.equal(angle.usage, "BOTH");
+  assert.equal(angle.priority, "LATER");
+  assert.equal(angle.painScore, 0);
+  assert.equal(angle.sourceTaskId, "ti-angle-1");
+});
+
+test("createAngle honors explicit classification values", () => {
+  const angle = createAngle("node-1", { title: "Muzlagan pul", category: "Moliya", usage: "PERFORMANCE", priority: "NOW", painScore: 4, clarityScore: 5, evidenceScore: 3, iboxRelevanceScore: 5, organicPotential: 2, performancePotential: 4 }, null, fixedNow);
+  assert.equal(angle.category, "Moliya");
+  assert.equal(angle.usage, "PERFORMANCE");
+  assert.equal(angle.priority, "NOW");
+  assert.equal(angle.painScore, 4);
+});
+
+// --- Destination (belongs to a ProblemCategory, never the knowledge tree) ---
+
+test("createDestination belongs to a ProblemCategory and starts PLANNED", () => {
+  const destination = createDestination({ problemCategoryId: "pcat-1", name: "Qoldiq audit checklist", type: "CHECKLIST_OR_PDF" }, fixedNow);
+  assert.equal(destination.problemCategoryId, "pcat-1");
+  assert.equal(destination.status, "PLANNED");
+  assert.equal(destination.primaryUrl, null);
+});
+
+test("setDestinationStatus transitions and is a no-op when unchanged; isDestinationReadyForPublish reads READY", () => {
+  const destination = createDestination({ problemCategoryId: "pcat-1", name: "Checklist", type: "CHECKLIST_OR_PDF" }, fixedNow);
+  assert.equal(setDestinationStatus(destination, "PLANNED", fixedNow), destination);
+  const ready = setDestinationStatus(destination, "READY", fixedNow);
+  assert.equal(isDestinationReadyForPublish(ready), true);
+  assert.equal(isDestinationReadyForPublish(destination), false);
+});
+
+test("createAngleDestinationLink is a plain many-to-many join row", () => {
+  const link = createAngleDestinationLink("angle-1", "dest-1", fixedNow);
+  assert.equal(link.angleId, "angle-1");
+  assert.equal(link.destinationId, "dest-1");
+  assert.ok(link.id);
+});
+
+// --- RepurposeMap + AtomicIdea ---
+
+test("createRepurposeMap is associated with exactly one Blog", () => {
+  const map = createRepurposeMap("blog-1", "ti-repurpose-1", fixedNow);
+  assert.equal(map.blogId, "blog-1");
+  assert.equal(map.sourceTaskId, "ti-repurpose-1");
+});
+
+test("createAtomicIdea supports multiple selected formats, an optional angle, and independent destinationNeeded", () => {
+  const idea = createAtomicIdea({ repurposeMapId: "rmap-1", text: "Muammo nima?", coverageType: "PROBLEM", decision: "CREATE_CONTENT", selectedFormats: ["REEL", "CAROUSEL", "TEXT_POST"], angleId: "angle-1", destinationNeeded: true }, fixedNow);
+  assert.deepEqual(idea.selectedFormats, ["REEL", "CAROUSEL", "TEXT_POST"]);
+  assert.equal(idea.angleId, "angle-1");
+  assert.equal(idea.destinationNeeded, true);
+});
+
+test("createAtomicIdea defaults angleId to null and destinationNeeded to false", () => {
+  const idea = createAtomicIdea({ repurposeMapId: "rmap-1", text: "Qanday tekshirish mumkin?", coverageType: "SOLUTION", decision: "LATER", selectedFormats: [] }, fixedNow);
+  assert.equal(idea.angleId, null);
+  assert.equal(idea.destinationNeeded, false);
+  assert.deepEqual(idea.selectedFormats, []);
 });
 
 test("ref() builds a typed ContentEntityRef", () => {

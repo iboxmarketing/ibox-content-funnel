@@ -1,15 +1,24 @@
 "use client";
 
 /**
- * Content Tree (V1 Sprint 3, section 13): browse Domain -> ProblemCategory
- * -> ProblemPart -> KnowledgeNode -> Blog -> Material. A plain nested
- * list, not a reuse of KnowledgeCanvas's Area/Stage/Process shell -- that
- * model doesn't map onto this tree and forcing it would just create
- * conceptual confusion (per instruction, correctness over visual polish).
+ * Content Tree (V1 Sprint 3, section 13; Destination Library added Sprint
+ * 4, section 6): browse Domain -> ProblemCategory -> ProblemPart ->
+ * KnowledgeNode -> Blog -> Material. A plain nested list, not a reuse of
+ * KnowledgeCanvas's Area/Stage/Process shell -- that model doesn't map
+ * onto this tree and forcing it would just create conceptual confusion
+ * (per instruction, correctness over visual polish).
  *
- * Angle and Destination are intentionally absent -- they are not tree
- * nodes. TaskInstances are also intentionally absent -- a task operates
- * on an entity here, it never appears as a node of this tree itself.
+ * Angle and Destination are intentionally absent from the TREE itself --
+ * they are not tree nodes. Destination is instead shown as a
+ * ProblemCategory-scoped "Destination Library" section in that category's
+ * own detail panel (never a global library). TaskInstances are also
+ * intentionally absent from the tree -- a task operates on an entity
+ * here, it never appears as a node of this tree itself.
+ *
+ * Deep tree-wide search/filtering (section 20) is explicitly secondary
+ * and skipped this sprint beyond the one low-cost filter below (the
+ * Destination Library's own status filter) -- not worth the added
+ * complexity of expand-to-match tree filtering for this sprint's scope.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronRight, Lightbulb, ShieldCheck } from "lucide-react";
@@ -17,13 +26,16 @@ import { Badge } from "@/components/ui/badge";
 import { useContentEntityStore } from "@/components/content-entity-store-provider";
 import { useTaskRuntimeStore } from "@/components/task-runtime-store-provider";
 import {
+  anglesForDestination,
   blogsForNode,
+  destinationsForProblemCategory,
   knowledgeNodesForPart,
   materialsForBlog,
+  materialsForDestination,
   problemCategoriesForDomain,
   problemPartsForCategory,
 } from "@/lib/content-entity-store";
-import type { ContentEntityType } from "@/lib/content-entity";
+import { DESTINATION_STATUSES, type ContentEntityType, type Destination, type DestinationStatus } from "@/lib/content-entity";
 
 type SelectedEntity = { type: ContentEntityType; id: string } | null;
 
@@ -42,6 +54,55 @@ function TreeRow({ depth, label, badge, selected, onSelect, children }: { depth:
         {badge && <Badge variant="outline" className="shrink-0 text-[9px]">{badge}</Badge>}
       </div>
       {hasChildren && expanded && <div>{children}</div>}
+    </div>
+  );
+}
+
+/** Section 6: Problem-Category-scoped Destination Library. Deliberately
+ * NOT a global library -- `destinationsForProblemCategory` already
+ * guarantees that scoping. */
+function DestinationLibrary({ problemCategoryId }: { problemCategoryId: string }) {
+  const { state } = useContentEntityStore();
+  const [statusFilter, setStatusFilter] = useState<DestinationStatus | "ALL">("ALL");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const destinations = destinationsForProblemCategory(state, problemCategoryId).filter((d) => statusFilter === "ALL" || d.status === statusFilter);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-[.06em] text-slate-500">Destination Library ({destinations.length})</p>
+        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as DestinationStatus | "ALL")} className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px]">
+          <option value="ALL">Barcha status</option>
+          {DESTINATION_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      {destinations.map((destination: Destination) => {
+        const expanded = expandedId === destination.id;
+        const angles = anglesForDestination(state, destination.id);
+        const materials = materialsForDestination(state, destination.id);
+        return (
+          <div key={destination.id} className="rounded-lg border border-slate-200 bg-white p-2.5">
+            <button type="button" onClick={() => setExpandedId(expanded ? null : destination.id)} className="flex w-full items-center gap-2 text-left">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-900">{destination.name}</p>
+                <p className="text-[11px] text-slate-500">{destination.type}{destination.primaryUrl ? ` · ${destination.primaryUrl}` : ""}</p>
+              </div>
+              <Badge variant="outline" className="shrink-0 text-[10px]">{destination.status}</Badge>
+            </button>
+            {expanded && (
+              <div className="mt-2 space-y-1.5 border-t border-slate-100 pt-2 text-[11px] text-slate-600">
+                <p><strong className="text-slate-900">Value proposition:</strong> {destination.valueProposition || "—"}</p>
+                <p><strong className="text-slate-900">Owner:</strong> {destination.owner ?? "—"}</p>
+                <p><strong className="text-slate-900">Deadline:</strong> {destination.deadline ?? "—"}</p>
+                <p><strong className="text-slate-900">Related Angles:</strong> {angles.length ? angles.map((a) => a.title).join(", ") : "—"}</p>
+                <p><strong className="text-slate-900">Related Materials:</strong> {materials.length ? materials.map((m) => m.title).join(", ") : "—"}</p>
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {!destinations.length && <p className="text-[11px] text-slate-400">Bu Problem Category uchun hali destination yo&apos;q.</p>}
     </div>
   );
 }
@@ -134,9 +195,13 @@ export function ContentTreeView() {
                 {"state" in detail && <div><dt className="font-semibold text-slate-900">State</dt><dd>{detail.state}</dd></div>}
                 {"format" in detail && <div><dt className="font-semibold text-slate-900">Format</dt><dd>{detail.format}</dd></div>}
                 {"primaryLink" in detail && detail.primaryLink && <div><dt className="font-semibold text-slate-900">Link</dt><dd className="truncate">{detail.primaryLink}</dd></div>}
+                {"angleId" in detail && detail.angleId && <div><dt className="font-semibold text-slate-900">Angle</dt><dd className="truncate font-mono">{detail.angleId}</dd></div>}
+                {"destinationNeeded" in detail && <div><dt className="font-semibold text-slate-900">Destination kerak</dt><dd>{detail.destinationNeeded ? "Ha" : "Yo'q"}</dd></div>}
+                {"destinationId" in detail && <div><dt className="font-semibold text-slate-900">Aniq destination</dt><dd className="truncate font-mono">{detail.destinationId ?? "— (keyinroq tanlanadi)"}</dd></div>}
                 {"sourceTaskId" in detail && detail.sourceTaskId && <div><dt className="font-semibold text-slate-900">Manba task</dt><dd className="truncate font-mono">{detail.sourceTaskId}</dd></div>}
                 <div><dt className="font-semibold text-slate-900">Yaratilgan</dt><dd>{new Date(detail.createdAt).toLocaleString("uz")}</dd></div>
               </dl>
+              {selected?.type === "PROBLEM_CATEGORY" && <DestinationLibrary problemCategoryId={selected.id} />}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-slate-400">Tafsilot ko&apos;rish uchun daraxtdan biror narsa tanlang.</div>

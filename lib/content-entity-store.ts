@@ -1,24 +1,37 @@
 /**
- * Shared Content Entity store (V1 Sprint 3): session-only reducer holding
- * the whole Domain -> ProblemCategory -> ProblemPart -> KnowledgeNode ->
- * Blog -> Material tree. Mirrors content-os-store.ts / task-runtime-store.ts
- * in shape: pure state + actions here, a thin `useReducer` React wrapper in
+ * Shared Content Entity store (V1 Sprint 3, extended Sprint 4):
+ * session-only reducer holding the whole Domain -> ProblemCategory ->
+ * ProblemPart -> KnowledgeNode -> Blog -> Material tree, plus the
+ * Sprint 4 side relations (Angle, Destination, Angle<->Destination links,
+ * RepurposeMap, AtomicIdea) that are NOT tree nodes themselves. Mirrors
+ * content-os-store.ts / task-runtime-store.ts in shape: pure state +
+ * actions here, a thin `useReducer` React wrapper in
  * components/content-entity-store-provider.tsx.
  */
 import {
   setBlogPrimaryLink,
   setBlogState,
+  setDestinationStatus,
   setKnowledgeNodeStatus,
+  setMaterialDestination,
+  setMaterialStatus,
+  type Angle,
+  type AngleDestinationLink,
+  type AtomicIdea,
   type Blog,
   type BlogState,
   type ContentEntityRef,
   type ContentEntityType,
+  type Destination,
+  type DestinationStatus,
   type Domain,
   type KnowledgeNode,
   type KnowledgeNodeStatus,
   type Material,
+  type MaterialStatus,
   type ProblemCategory,
   type ProblemPart,
+  type RepurposeMap,
 } from "./content-entity";
 import { QOLDIQ_CONTENT_ENTITY_FIXTURE } from "./content-entity-fixtures";
 
@@ -29,6 +42,11 @@ export interface ContentEntityState {
   readonly knowledgeNodes: readonly KnowledgeNode[];
   readonly blogs: readonly Blog[];
   readonly materials: readonly Material[];
+  readonly angles: readonly Angle[];
+  readonly destinations: readonly Destination[];
+  readonly angleDestinationLinks: readonly AngleDestinationLink[];
+  readonly repurposeMaps: readonly RepurposeMap[];
+  readonly atomicIdeas: readonly AtomicIdea[];
 }
 
 export function initialContentEntityState(): ContentEntityState {
@@ -36,7 +54,19 @@ export function initialContentEntityState(): ContentEntityState {
 }
 
 export function emptyContentEntityState(): ContentEntityState {
-  return { domains: [], problemCategories: [], problemParts: [], knowledgeNodes: [], blogs: [], materials: [] };
+  return {
+    domains: [],
+    problemCategories: [],
+    problemParts: [],
+    knowledgeNodes: [],
+    blogs: [],
+    materials: [],
+    angles: [],
+    destinations: [],
+    angleDestinationLinks: [],
+    repurposeMaps: [],
+    atomicIdeas: [],
+  };
 }
 
 export type ContentEntityAction =
@@ -47,7 +77,16 @@ export type ContentEntityAction =
   | { readonly type: "ADD_BLOGS"; readonly blogs: readonly Blog[] }
   | { readonly type: "SET_BLOG_STATE"; readonly id: string; readonly state: BlogState }
   | { readonly type: "SET_BLOG_PRIMARY_LINK"; readonly id: string; readonly primaryLink: string | null }
-  | { readonly type: "ADD_MATERIAL"; readonly material: Material };
+  | { readonly type: "ADD_MATERIAL"; readonly material: Material }
+  | { readonly type: "ADD_MATERIALS"; readonly materials: readonly Material[] }
+  | { readonly type: "SET_MATERIAL_STATUS"; readonly id: string; readonly status: MaterialStatus }
+  | { readonly type: "SET_MATERIAL_DESTINATION"; readonly id: string; readonly destinationId: string | null }
+  | { readonly type: "ADD_ANGLES"; readonly angles: readonly Angle[] }
+  | { readonly type: "ADD_DESTINATION"; readonly destination: Destination }
+  | { readonly type: "SET_DESTINATION_STATUS"; readonly id: string; readonly status: DestinationStatus }
+  | { readonly type: "ADD_ANGLE_DESTINATION_LINKS"; readonly links: readonly AngleDestinationLink[] }
+  | { readonly type: "ADD_REPURPOSE_MAP"; readonly repurposeMap: RepurposeMap }
+  | { readonly type: "ADD_ATOMIC_IDEAS"; readonly ideas: readonly AtomicIdea[] };
 
 /** Pure. Never mutates `state`. */
 export function contentEntityReducer(state: ContentEntityState, action: ContentEntityAction, now: () => string = () => new Date().toISOString()): ContentEntityState {
@@ -78,6 +117,33 @@ export function contentEntityReducer(state: ContentEntityState, action: ContentE
     }
     case "ADD_MATERIAL":
       return { ...state, materials: [...state.materials, action.material] };
+    case "ADD_MATERIALS":
+      return { ...state, materials: [...state.materials, ...action.materials] };
+    case "SET_MATERIAL_STATUS": {
+      const current = state.materials.find((material) => material.id === action.id);
+      if (!current) return state;
+      return { ...state, materials: state.materials.map((material) => (material.id === action.id ? setMaterialStatus(current, action.status, now) : material)) };
+    }
+    case "SET_MATERIAL_DESTINATION": {
+      const current = state.materials.find((material) => material.id === action.id);
+      if (!current) return state;
+      return { ...state, materials: state.materials.map((material) => (material.id === action.id ? setMaterialDestination(current, action.destinationId, now) : material)) };
+    }
+    case "ADD_ANGLES":
+      return { ...state, angles: [...state.angles, ...action.angles] };
+    case "ADD_DESTINATION":
+      return { ...state, destinations: [...state.destinations, action.destination] };
+    case "SET_DESTINATION_STATUS": {
+      const current = state.destinations.find((destination) => destination.id === action.id);
+      if (!current) return state;
+      return { ...state, destinations: state.destinations.map((destination) => (destination.id === action.id ? setDestinationStatus(current, action.status, now) : destination)) };
+    }
+    case "ADD_ANGLE_DESTINATION_LINKS":
+      return { ...state, angleDestinationLinks: [...state.angleDestinationLinks, ...action.links] };
+    case "ADD_REPURPOSE_MAP":
+      return { ...state, repurposeMaps: [...state.repurposeMaps, action.repurposeMap] };
+    case "ADD_ATOMIC_IDEAS":
+      return { ...state, atomicIdeas: [...state.atomicIdeas, ...action.ideas] };
     default:
       return state;
   }
@@ -105,7 +171,40 @@ export function materialsForBlog(state: ContentEntityState, blogId: string): rea
   return state.materials.filter((material) => material.blogId === blogId);
 }
 
-export function entityByRef(state: ContentEntityState, entityRef: ContentEntityRef): Domain | ProblemCategory | ProblemPart | KnowledgeNode | Blog | Material | undefined {
+export function anglesForKnowledgeNode(state: ContentEntityState, knowledgeNodeId: string): readonly Angle[] {
+  return state.angles.filter((angle) => angle.knowledgeNodeId === knowledgeNodeId);
+}
+
+export function destinationsForProblemCategory(state: ContentEntityState, problemCategoryId: string): readonly Destination[] {
+  return state.destinations.filter((destination) => destination.problemCategoryId === problemCategoryId);
+}
+
+export function destinationsForAngle(state: ContentEntityState, angleId: string): readonly Destination[] {
+  const destinationIds = new Set(state.angleDestinationLinks.filter((link) => link.angleId === angleId).map((link) => link.destinationId));
+  return state.destinations.filter((destination) => destinationIds.has(destination.id));
+}
+
+export function anglesForDestination(state: ContentEntityState, destinationId: string): readonly Angle[] {
+  const angleIds = new Set(state.angleDestinationLinks.filter((link) => link.destinationId === destinationId).map((link) => link.angleId));
+  return state.angles.filter((angle) => angleIds.has(angle.id));
+}
+
+export function materialsForDestination(state: ContentEntityState, destinationId: string): readonly Material[] {
+  return state.materials.filter((material) => material.destinationId === destinationId);
+}
+
+export function repurposeMapForBlog(state: ContentEntityState, blogId: string): RepurposeMap | undefined {
+  return state.repurposeMaps.find((map) => map.blogId === blogId);
+}
+
+export function atomicIdeasForRepurposeMap(state: ContentEntityState, repurposeMapId: string): readonly AtomicIdea[] {
+  return state.atomicIdeas.filter((idea) => idea.repurposeMapId === repurposeMapId);
+}
+
+export function entityByRef(
+  state: ContentEntityState,
+  entityRef: ContentEntityRef,
+): Domain | ProblemCategory | ProblemPart | KnowledgeNode | Blog | Material | Angle | Destination | RepurposeMap | undefined {
   switch (entityRef.entityType) {
     case "DOMAIN":
       return state.domains.find((e) => e.id === entityRef.entityId);
@@ -119,6 +218,12 @@ export function entityByRef(state: ContentEntityState, entityRef: ContentEntityR
       return state.blogs.find((e) => e.id === entityRef.entityId);
     case "MATERIAL":
       return state.materials.find((e) => e.id === entityRef.entityId);
+    case "ANGLE":
+      return state.angles.find((e) => e.id === entityRef.entityId);
+    case "DESTINATION":
+      return state.destinations.find((e) => e.id === entityRef.entityId);
+    case "REPURPOSE_MAP":
+      return state.repurposeMaps.find((e) => e.id === entityRef.entityId);
     default:
       return undefined;
   }
@@ -129,7 +234,9 @@ export function entityByRef(state: ContentEntityState, entityRef: ContentEntityR
 export function labelForRef(state: ContentEntityState, entityRef: ContentEntityRef): string | null {
   const entity = entityByRef(state, entityRef);
   if (!entity) return null;
-  return "name" in entity ? entity.name : entity.title;
+  if ("name" in entity) return entity.name;
+  if ("title" in entity) return entity.title;
+  return entityRef.entityId; // RepurposeMap has neither -- fall back to its id
 }
 
 // --- Tree integrity validation ---
@@ -139,7 +246,12 @@ export type ContentTreeValidationErrorCode =
   | "ORPHAN_PROBLEM_PART"
   | "ORPHAN_KNOWLEDGE_NODE"
   | "ORPHAN_BLOG"
-  | "ORPHAN_MATERIAL";
+  | "ORPHAN_MATERIAL"
+  | "ORPHAN_ANGLE"
+  | "ORPHAN_DESTINATION"
+  | "ORPHAN_ANGLE_DESTINATION_LINK"
+  | "ORPHAN_REPURPOSE_MAP"
+  | "ORPHAN_ATOMIC_IDEA";
 
 export interface ContentTreeValidationError {
   readonly code: ContentTreeValidationErrorCode;
@@ -172,6 +284,26 @@ export function validateContentTree(state: ContentEntityState): ContentTreeValid
   }
   for (const material of state.materials) {
     if (!blogIds.has(material.blogId)) errors.push({ code: "ORPHAN_MATERIAL", entityId: material.id, message: `Material "${material.title}" noma'lum Blog'ga ishora qiladi.` });
+  }
+
+  const angleIds = new Set(state.angles.map((a) => a.id));
+  const destinationIds = new Set(state.destinations.map((d) => d.id));
+  const repurposeMapIds = new Set(state.repurposeMaps.map((m) => m.id));
+
+  for (const angle of state.angles) {
+    if (!nodeIds.has(angle.knowledgeNodeId)) errors.push({ code: "ORPHAN_ANGLE", entityId: angle.id, message: `Angle "${angle.title}" noma'lum Knowledge Node'ga ishora qiladi.` });
+  }
+  for (const destination of state.destinations) {
+    if (!categoryIds.has(destination.problemCategoryId)) errors.push({ code: "ORPHAN_DESTINATION", entityId: destination.id, message: `Destination "${destination.name}" noma'lum Problem Category'ga ishora qiladi.` });
+  }
+  for (const link of state.angleDestinationLinks) {
+    if (!angleIds.has(link.angleId) || !destinationIds.has(link.destinationId)) errors.push({ code: "ORPHAN_ANGLE_DESTINATION_LINK", entityId: link.id, message: `Angle<->Destination link "${link.id}" noma'lum entity'ga ishora qiladi.` });
+  }
+  for (const map of state.repurposeMaps) {
+    if (!blogIds.has(map.blogId)) errors.push({ code: "ORPHAN_REPURPOSE_MAP", entityId: map.id, message: `Repurpose Map "${map.id}" noma'lum Blog'ga ishora qiladi.` });
+  }
+  for (const idea of state.atomicIdeas) {
+    if (!repurposeMapIds.has(idea.repurposeMapId)) errors.push({ code: "ORPHAN_ATOMIC_IDEA", entityId: idea.id, message: `Atomic Idea "${idea.id}" noma'lum Repurpose Map'ga ishora qiladi.` });
   }
 
   return errors;

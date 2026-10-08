@@ -13,7 +13,7 @@ import {
   type TaskRuntimeAction,
   type TaskRuntimeState,
 } from "@/lib/task-runtime-store";
-import { createTaskInstance, type FieldValue, type TaskInstance, type TaskInstanceDraft, type TaskInstanceStatus } from "@/lib/task-instance";
+import { createTaskInstance, type AtomicIdeaDraft, type FieldValue, type TaskInstance, type TaskInstanceDraft, type TaskInstanceStatus } from "@/lib/task-instance";
 import type { TaskLinkDraft } from "@/lib/task-link";
 import type { FieldDefinition } from "@/lib/task-type";
 
@@ -29,6 +29,9 @@ interface TaskRuntimeStoreValue {
   readonly editTransferredFieldValue: (instanceId: string, fieldId: string, value: FieldValue, writeBack?: { sourceTaskId: string; sourceFieldId: string }) => void;
   readonly addCustomField: (instanceId: string, field: FieldDefinition) => void;
   readonly removeCustomField: (instanceId: string, fieldId: string) => void;
+  readonly addAtomicIdeaDraft: (instanceId: string, draft: AtomicIdeaDraft) => void;
+  readonly updateAtomicIdeaDraft: (instanceId: string, draftId: string, changes: Partial<Omit<AtomicIdeaDraft, "id">>) => void;
+  readonly removeAtomicIdeaDraft: (instanceId: string, draftId: string) => void;
   readonly addLink: (instanceId: string, draft: TaskLinkDraft) => void;
   readonly updateLink: (instanceId: string, linkId: string, changes: Partial<TaskLinkDraft>) => void;
   readonly removeLink: (instanceId: string, linkId: string) => void;
@@ -56,6 +59,9 @@ export function TaskRuntimeStoreProvider({ children }: { children: ReactNode }) 
   );
   const addCustomField = useCallback((instanceId: string, field: FieldDefinition) => dispatch({ type: "ADD_CUSTOM_FIELD", instanceId, field }), []);
   const removeCustomField = useCallback((instanceId: string, fieldId: string) => dispatch({ type: "REMOVE_CUSTOM_FIELD", instanceId, fieldId }), []);
+  const addAtomicIdeaDraft = useCallback((instanceId: string, draft: AtomicIdeaDraft) => dispatch({ type: "ADD_ATOMIC_IDEA_DRAFT", instanceId, draft }), []);
+  const updateAtomicIdeaDraft = useCallback((instanceId: string, draftId: string, changes: Partial<Omit<AtomicIdeaDraft, "id">>) => dispatch({ type: "UPDATE_ATOMIC_IDEA_DRAFT", instanceId, draftId, changes }), []);
+  const removeAtomicIdeaDraft = useCallback((instanceId: string, draftId: string) => dispatch({ type: "REMOVE_ATOMIC_IDEA_DRAFT", instanceId, draftId }), []);
   const addLink = useCallback((instanceId: string, draft: TaskLinkDraft) => dispatch({ type: "ADD_LINK", instanceId, draft }), []);
   const updateLink = useCallback((instanceId: string, linkId: string, changes: Partial<TaskLinkDraft>) => dispatch({ type: "UPDATE_LINK", instanceId, linkId, changes }), []);
   const removeLink = useCallback((instanceId: string, linkId: string) => dispatch({ type: "REMOVE_LINK", instanceId, linkId }), []);
@@ -64,8 +70,14 @@ export function TaskRuntimeStoreProvider({ children }: { children: ReactNode }) 
   const addSuggestion = useCallback((taskInstanceId: string, taskTypeId: string, field: FieldDefinition, note: string) => dispatch({ type: "ADD_SUGGESTION", taskInstanceId, taskTypeId, field, note }), []);
 
   const value = useMemo<TaskRuntimeStoreValue>(
-    () => ({ state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField, addLink, updateLink, removeLink, complete, skip, addSuggestion }),
-    [state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField, addLink, updateLink, removeLink, complete, skip, addSuggestion],
+    () => ({
+      state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
+      addAtomicIdeaDraft, updateAtomicIdeaDraft, removeAtomicIdeaDraft, addLink, updateLink, removeLink, complete, skip, addSuggestion,
+    }),
+    [
+      state, createInstances, setStatus, setFieldValue, editTransferredFieldValue, addCustomField, removeCustomField,
+      addAtomicIdeaDraft, updateAtomicIdeaDraft, removeAtomicIdeaDraft, addLink, updateLink, removeLink, complete, skip, addSuggestion,
+    ],
   );
 
   return <TaskRuntimeStoreContext.Provider value={value}>{children}</TaskRuntimeStoreContext.Provider>;

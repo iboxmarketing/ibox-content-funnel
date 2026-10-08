@@ -17,6 +17,7 @@ const {
   getStartableSteps,
   getStepsGeneratedBy,
   buildTaskInstanceSeed,
+  buildStandaloneTaskInstanceSeed,
   buildTransferCandidates,
   destinationFieldsForTaskType,
   applyContextTransfer,
@@ -250,4 +251,93 @@ test("applyContextTransfer with no selections transfers nothing -- there is no a
   const { fieldValues, fieldProvenance } = applyContextTransfer(seed, blogInstance, []);
   assert.deepEqual(fieldValues, {});
   assert.deepEqual(fieldProvenance, []);
+});
+
+// --- Sprint 4 (section 11): sibling convergence via contentRef, e.g.
+// Destination Decision waiting on Blog + Angle + Performance Consultation
+// (three siblings under one Blog, not ancestors of each other).
+
+const CONVERGE_TEMPLATE_ID = "wf-converge";
+function convergeStep(overrides) {
+  return { templateId: CONVERGE_TEMPLATE_ID, taskTypeId: "tt-x", order: 0, overrides: undefined, ...overrides };
+}
+const cBlogStep = convergeStep({ id: "c-blog", nameTemplate: "Blog", dependsOn: [], blocking: true, skippable: false });
+const cAngleStep = convergeStep({ id: "c-angle", nameTemplate: "Angle", dependsOn: ["c-blog"], blocking: true, skippable: false });
+const cPerfStep = convergeStep({ id: "c-perf", nameTemplate: "Performance Consultation", dependsOn: ["c-blog"], blocking: true, skippable: false });
+const cHeadReviewStep = convergeStep({ id: "c-head-review", nameTemplate: "Head Review", dependsOn: ["c-blog"], blocking: true, skippable: false });
+const cDestinationDecisionStep = convergeStep({ id: "c-dest-decision", nameTemplate: "Destination Decision", dependsOn: ["c-blog", "c-angle", "c-perf"], blocking: true, skippable: false });
+const cRepurposeStep = convergeStep({ id: "c-repurpose", nameTemplate: "Repurpose Map", dependsOn: ["c-head-review", "c-dest-decision"], blocking: false, skippable: true });
+const CONVERGE_TEMPLATE = {
+  id: CONVERGE_TEMPLATE_ID, name: "Converge", description: "", moduleType: "OTHER", version: 1, isActive: true,
+  steps: [cBlogStep, cAngleStep, cPerfStep, cHeadReviewStep, cDestinationDecisionStep, cRepurposeStep], createdAt: "", updatedAt: "",
+};
+
+const NODE_REF = { entityType: "KNOWLEDGE_NODE", entityId: "node-1" };
+const OTHER_NODE_REF = { entityType: "KNOWLEDGE_NODE", entityId: "node-2" };
+
+function cInstanceFor(step_, overrides = {}) {
+  return createTaskInstance({
+    taskTypeId: step_.taskTypeId, workflowTemplateId: CONVERGE_TEMPLATE_ID, workflowStepId: step_.id, title: step_.nameTemplate,
+    assignee: null, deadline: null, fieldValues: {}, customFields: [], links: [], sourceTaskId: null, contentRef: NODE_REF, ...overrides,
+  }, fixedNow);
+}
+
+test("Destination Decision stays ineligible until Blog + Angle + Performance Consultation are ALL settled for the same branch", () => {
+  const blog = settled(cInstanceFor(cBlogStep));
+  const angle = settled(cInstanceFor(cAngleStep, { sourceTaskId: blog.id }));
+  // Performance Consultation not done yet.
+  const generated = getStepsGeneratedBy(CONVERGE_TEMPLATE, [blog, angle], angle).map((s) => s.id);
+  assert.deepEqual(generated, [], "Destination Decision must wait for Performance Consultation too");
+});
+
+test("Destination Decision becomes eligible once all three siblings are settled, resolved via shared contentRef (not ancestor lineage)", () => {
+  const blog = settled(cInstanceFor(cBlogStep));
+  const angle = settled(cInstanceFor(cAngleStep, { sourceTaskId: blog.id }));
+  const perf = settled(cInstanceFor(cPerfStep, { sourceTaskId: blog.id }));
+  // Whichever of Angle/Performance Consultation completes LAST is the one
+  // whose own lineage (blog -> itself) does NOT contain the other sibling --
+  // this only works via the contentRef rule, not ancestor walking.
+  const generatedFromPerf = getStepsGeneratedBy(CONVERGE_TEMPLATE, [blog, angle, perf], perf).map((s) => s.id);
+  assert.deepEqual(generatedFromPerf, ["c-dest-decision"]);
+});
+
+test("Destination Decision from a DIFFERENT Blog (different contentRef) never satisfies this Blog's convergence", () => {
+  const blog = settled(cInstanceFor(cBlogStep));
+  const angle = settled(cInstanceFor(cAngleStep, { sourceTaskId: blog.id }));
+  // Performance Consultation exists but for an UNRELATED KnowledgeNode/Blog.
+  const otherBlog = settled(cInstanceFor(cBlogStep, { contentRef: OTHER_NODE_REF }));
+  const unrelatedPerf = settled(cInstanceFor(cPerfStep, { sourceTaskId: otherBlog.id, contentRef: OTHER_NODE_REF }));
+  const generated = getStepsGeneratedBy(CONVERGE_TEMPLATE, [blog, angle, otherBlog, unrelatedPerf], angle).map((s) => s.id);
+  assert.deepEqual(generated, [], "a Performance Consultation from a different Blog must never satisfy this branch");
+});
+
+test("Repuropse Map waits on BOTH Head Review and Destination Decision, each possibly arriving via a different lineage", () => {
+  const blog = settled(cInstanceFor(cBlogStep));
+  const angle = settled(cInstanceFor(cAngleStep, { sourceTaskId: blog.id }));
+  const perf = settled(cInstanceFor(cPerfStep, { sourceTaskId: blog.id }));
+  const headReview = settled(cInstanceFor(cHeadReviewStep, { sourceTaskId: blog.id }));
+  // Destination Decision is generated FROM Performance Consultation's lineage (its sourceTaskId), not Head Review's.
+  const destinationDecision = settled(cInstanceFor(cDestinationDecisionStep, { sourceTaskId: perf.id }));
+  const allInstances = [blog, angle, perf, headReview, destinationDecision];
+
+  // From Head Review's completion: Destination Decision is a SIBLING
+  // (different lineage), resolved via contentRef.
+  const generatedFromHeadReview = getStepsGeneratedBy(CONVERGE_TEMPLATE, allInstances, headReview).map((s) => s.id);
+  assert.deepEqual(generatedFromHeadReview, ["c-repurpose"]);
+
+  // From Destination Decision's completion: Head Review is a cousin
+  // (also resolved via contentRef, not lineage).
+  const generatedFromDestinationDecision = getStepsGeneratedBy(CONVERGE_TEMPLATE, allInstances, destinationDecision).map((s) => s.id);
+  assert.deepEqual(generatedFromDestinationDecision, ["c-repurpose"]);
+});
+
+// --- buildStandaloneTaskInstanceSeed (section 9: Destination-creation tasks) ---
+
+test("buildStandaloneTaskInstanceSeed has no workflowStepId/workflowTemplateId -- it is not governed by any WorkflowTemplate", () => {
+  const seed = buildStandaloneTaskInstanceSeed(SEO_TASK_TYPE, "Checklist / PDF Creation", "ti-dest-decision-1", { entityType: "DESTINATION", entityId: "dest-1" });
+  assert.equal(seed.workflowStepId, null);
+  assert.equal(seed.workflowTemplateId, null);
+  assert.equal(seed.title, "Checklist / PDF Creation");
+  assert.equal(seed.sourceTaskId, "ti-dest-decision-1");
+  assert.deepEqual(seed.contentRef, { entityType: "DESTINATION", entityId: "dest-1" });
 });

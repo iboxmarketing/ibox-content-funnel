@@ -7,14 +7,18 @@
  * TaskClient, no Supabase.
  */
 import {
+  addAtomicIdeaDraft,
   addCustomFieldToInstance,
   createTemplateImprovementSuggestion,
   editTransferredFieldValue,
   markTaskInstanceDone,
+  removeAtomicIdeaDraft,
   removeCustomFieldFromInstance,
   setTaskInstanceFieldValue,
   setTaskInstanceStatus,
   skipTaskInstance,
+  updateAtomicIdeaDraft,
+  type AtomicIdeaDraft,
   type FieldValue,
   type TaskInstance,
   type TaskInstanceStatus,
@@ -43,6 +47,9 @@ export type TaskRuntimeAction =
   | { readonly type: "EDIT_TRANSFERRED_FIELD_VALUE"; readonly instanceId: string; readonly fieldId: string; readonly value: FieldValue; readonly alsoUpdateSourceTaskId?: string; readonly sourceFieldId?: string }
   | { readonly type: "ADD_CUSTOM_FIELD"; readonly instanceId: string; readonly field: FieldDefinition }
   | { readonly type: "REMOVE_CUSTOM_FIELD"; readonly instanceId: string; readonly fieldId: string }
+  | { readonly type: "ADD_ATOMIC_IDEA_DRAFT"; readonly instanceId: string; readonly draft: AtomicIdeaDraft }
+  | { readonly type: "UPDATE_ATOMIC_IDEA_DRAFT"; readonly instanceId: string; readonly draftId: string; readonly changes: Partial<Omit<AtomicIdeaDraft, "id">> }
+  | { readonly type: "REMOVE_ATOMIC_IDEA_DRAFT"; readonly instanceId: string; readonly draftId: string }
   | { readonly type: "ADD_LINK"; readonly instanceId: string; readonly draft: TaskLinkDraft }
   | { readonly type: "UPDATE_LINK"; readonly instanceId: string; readonly linkId: string; readonly changes: Partial<TaskLinkDraft> }
   | { readonly type: "REMOVE_LINK"; readonly instanceId: string; readonly linkId: string }
@@ -83,6 +90,18 @@ export function taskRuntimeReducer(state: TaskRuntimeState, action: TaskRuntimeA
     case "REMOVE_CUSTOM_FIELD": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
       return withInstance(state, action.instanceId, (instance) => removeCustomFieldFromInstance(instance, action.fieldId, now));
+    }
+    case "ADD_ATOMIC_IDEA_DRAFT": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => addAtomicIdeaDraft(instance, action.draft, now));
+    }
+    case "UPDATE_ATOMIC_IDEA_DRAFT": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => updateAtomicIdeaDraft(instance, action.draftId, action.changes, now));
+    }
+    case "REMOVE_ATOMIC_IDEA_DRAFT": {
+      if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
+      return withInstance(state, action.instanceId, (instance) => removeAtomicIdeaDraft(instance, action.draftId, now));
     }
     case "ADD_LINK": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;

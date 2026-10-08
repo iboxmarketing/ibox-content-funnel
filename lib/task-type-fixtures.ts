@@ -104,19 +104,38 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     name: "Performance Consultation",
     description: "Digital marketer bilan destination/offer/CTA maslahati.",
     requiredFields: [longTextField("recommendation", "Recommendation")],
+    optionalFields: [
+      longTextField("suggested-messages", "Suggested Messages", false),
+      longTextField("suggested-hooks", "Suggested Hooks", false),
+      longTextField("suggested-offers", "Suggested Offers", false),
+      longTextField("suggested-destination-ideas", "Suggested Destination Ideas", false),
+    ],
     defaultAssigneeRule: fixedRole("Digital marketer"),
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Destination Decision",
-    description: "Mavjud destination'larni ko'rib chiqish; kerak bo'lsa yangi yaratish.",
-    requiredFields: [booleanField("reused-existing", "Mavjud destination ishlatildi")],
+    description: "Mavjud destination'larni ko'rib chiqish; kerak bo'lsa yangi yaratish. Reuse/Create new qarori Task Detail'ning maxsus bo'limida qilinadi.",
+    requiredFields: [
+      longTextField("content-perspective", "Content Perspective"),
+      longTextField("digital-recommendation", "Digital Recommendation"),
+      longTextField("why-selected", "Why Selected"),
+      booleanField("create-new", "Create new destination?", true),
+    ],
+    // "chosen-destination-id" is only required when create-new is false --
+    // a plain required field can't express that conditional, so it stays
+    // optional here and Task Detail's dedicated Destination Decision block
+    // enforces it directly (section 7-9).
+    optionalFields: [
+      textField("chosen-destination-id", "Chosen Destination (ichki)", false),
+      selectField("destination-type", "Destination Type (agar yangi)", ["YOUTUBE", "CHECKLIST_OR_PDF", "EXTERNAL_TOOL_OR_URL"], false),
+    ],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
     name: "Repurpose Map",
-    description: "Blog'dan atomic idea'larni qo'lda ajratib olish.",
-    requiredFields: [longTextField("atomic-ideas", "Atomic Ideas")],
+    description: "Blog'dan Atomic Idea'larni qo'lda ajratib olish -- Task Detail'ning maxsus Atomic Idea muharririda (structured, free-text emas).",
+    requiredFields: [],
     allowedLinkLabels: ["Reference"],
   })),
   seed(draft({
@@ -199,6 +218,34 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     name: "Learning",
     description: "Natija, nima ishladi, keyingi qadam.",
     requiredFields: [textField("result", "Natija"), longTextField("what-worked", "Nima ishladi?"), longTextField("next-step", "Keyingi qadam")],
+    allowedLinkLabels: ["Reference"],
+  })),
+  // --- V1 Sprint 4: first production task per Material format (section 17) ---
+  seed(draft({
+    name: "YouTube",
+    description: "YouTube uchun birinchi production task (script/outline).",
+    requiredFields: [longTextField("script", "Script / Outline")],
+    defaultPrompt: "Quyidagi atomic idea asosida YouTube video script/outline yoz.\n\n---\nINPUT:\n",
+    allowedLinkLabels: ["Script", "Reference"],
+  })),
+  // --- V1 Sprint 4: first local Destination-creation tasks (section 9) ---
+  seed(draft({
+    name: "YouTube Outline",
+    description: "Yangi YOUTUBE destination uchun birinchi yaratish taski.",
+    requiredFields: [longTextField("outline", "Outline")],
+    allowedLinkLabels: ["Reference"],
+  })),
+  seed(draft({
+    name: "Checklist / PDF Creation",
+    description: "Yangi CHECKLIST_OR_PDF destination uchun birinchi yaratish taski.",
+    requiredFields: [longTextField("content-outline", "Content Outline")],
+    allowedLinkLabels: ["Reference"],
+  })),
+  seed(draft({
+    name: "External Tool Setup",
+    description: "Yangi EXTERNAL_TOOL_OR_URL destination uchun birinchi sozlash taski.",
+    requiredFields: [longTextField("setup-notes", "Setup Notes")],
+    optionalFields: [urlField("tool-url", "Tool URL", false)],
     allowedLinkLabels: ["Reference"],
   })),
 ];
