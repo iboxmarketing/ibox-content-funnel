@@ -446,9 +446,34 @@ All run strictly **after** the 8 task-bot migrations; none edits them.
   `public.tasks` (they are ordinary tasks).
 - The down script is exercised in the 8B dry-run (apply → down → re-apply).
 
+## S0. DECISIONS APPROVED AFTER 8A (2026-10-09)
+
+**D1 — Task status transitions (resolves S1 as a product decision).**
+Content OS does NOT route every task through REVIEW. Required production
+semantics, using only the existing seven statuses:
+
+| Flow | Transitions |
+|---|---|
+| Normal Content OS task | ASSIGNED → IN_PROGRESS → DONE |
+| Review-required task | ASSIGNED → IN_PROGRESS → REVIEW → DONE |
+| Head Review requests revision of its source Blog | Blog DONE → REVISION |
+| Blog corrected | Blog REVISION → DONE |
+
+Today's task-bot rules allow none of IN_PROGRESS → DONE, DONE → REVISION or
+REVISION → DONE (DONE only via REVIEW → APPROVE; DONE only REOPENs to
+ASSIGNED). The task-bot transition rules will be extended **narrowly** for
+these Content OS flows in a later task-bot change. Not implemented or
+applied yet. The Content OS schema drafts are unaffected (status stays in
+`public.tasks`).
+
+**D2 — SEO role (resolves S3).** Persistent role code: **`SEO_SPECIALIST`**.
+`SMM_MANAGER` remains for legacy compatibility. The `users.role` CHECK change
+must be its **own task-bot migration**, never mixed into the Content OS
+content-schema drafts. Not drafted or applied yet.
+
 ## S. OPEN_PRODUCT_DECISIONS
 
-1. **BLOCKER for wiring (not for schema) — status-machine parity.** Production
+1. **[DECIDED — see S0/D1; task-bot change pending] Status-machine parity.** Production
    (`transition_task_with_events` + `src/domain/workflow.ts`) only allows
    DONE via APPROVE from REVIEW, by Head or creator; DONE can only REOPEN to
    ASSIGNED; BLOCKED needs a reason. The local V1 runtime
@@ -463,7 +488,7 @@ All run strictly **after** the 8 task-bot migrations; none edits them.
    are NOT NULL; local tasks can exist without them (preview defaults,
    reconciler-created Publish Check / Learning). Content OS must resolve a
    real assignee and deadline before creating a task.
-3. **SEO role** — `users.role` CHECK has no SEO (repo; live per brief). Fixture
+3. **[DECIDED — see S0/D2: `SEO_SPECIALIST`; separate task-bot migration pending] SEO role** — `users.role` CHECK has no SEO (repo; live per brief). Fixture
    "SEO" assignee rule cannot resolve. Separate task-bot migration; code TBD.
    `SMM_MANAGER` stays for compatibility.
 4. **Role mapping** of Task Type FIXED_ROLE strings ("Operator / Montajer",
