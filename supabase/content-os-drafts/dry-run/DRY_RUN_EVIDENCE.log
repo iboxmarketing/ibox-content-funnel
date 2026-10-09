@@ -1,0 +1,139 @@
+
+=== environment
+PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+task-bot repo HEAD: 1c7bb32, dirty files: 0
+task-bot migrations md5: 940438a9e036cf02d1ccacfc23972333
+
+=== 1. fresh apply on the task-bot baseline (db dryrun_a)
+apply task-bot 20260906143255_foundation_schema.sql
+apply task-bot 20260906150722_harden_revision_history.sql
+apply task-bot 20260906151514_fast_track_mvp_core.sql
+apply task-bot 20260906162000_secure_head_bootstrap.sql
+apply task-bot 20260906163500_telegram_username_integrity.sql
+apply task-bot 20260909090000_next_product_phase.sql
+apply task-bot 20260909200000_reminders_and_membership.sql
+apply task-bot 20260914090000_autostart_tasks.sql
+task-bot fingerprint before drafts: 402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+  apply draft 20261009100000_content_os_00_helpers.sql
+  apply draft 20261009100100_content_os_01_content_entities.sql
+  apply draft 20261009100200_content_os_02_task_config.sql
+  apply draft 20261009100300_content_os_03_task_runtime.sql
+  apply draft 20261009100400_content_os_04_idempotency.sql
+  apply draft 20261009100500_content_os_05_external_identity_links.sql
+task-bot fingerprint after drafts:  402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+PASS T01 task-bot catalog objects unchanged by the drafts
+content tables created: 27
+
+=== 2. contract tests (constraints, FKs, uniqueness, versioning, lineage, idempotency, identity, grants)
+PASS T02 no tasks.content_ref column
+PASS T02 no content_* column added to any task-bot table
+PASS T05 one Atomic Idea generates multiple Materials (one per format)
+PASS T04 Material without Destination is allowed (destination_id NULL)
+PASS T08 ShootSession membership is stored once (content_materials.shoot_session_id)
+PASS T03 material format CHECK (23514 new row for relation "content_materials" violates check constraint "content_materials_format_check")
+PASS T03 blog state CHECK (23514 new row for relation "content_blogs" violates check constraint "content_blogs_state_check")
+PASS T03 atomic idea formats ⊆ material formats (23514 new row for relation "content_atomic_ideas" violates check constraint "content_atomic_ideas_selected_formats_check")
+PASS T03 destination type CHECK (23514 new row for relation "content_destinations" violates check constraint "content_destinations_type_check")
+PASS T04 CTA type and text are set together (23514 new row for relation "content_materials" violates check constraint "content_materials_cta_pair_check")
+PASS T05 one Material per (idea, format) (23505 duplicate key value violates unique constraint "content_materials_one_per_idea_format_idx")
+PASS T11 legacy stable ref is unique (CP-070) (23505 duplicate key value violates unique constraint "content_problem_categories_legacy_ref_idx")
+PASS T07 one Research task relates to a part (PRIMARY) and many KnowledgeNodes (RELATED)
+PASS T07 reverse lookup: one Material has many tasks (incl. the shared Shoot)
+PASS T07 one entity shared by several tasks
+PASS T07 at most one PRIMARY entity per task (23505 duplicate key value violates unique constraint "content_task_links_one_primary_idx")
+PASS T07 idempotent uniqueness (same link twice) (23505 duplicate key value violates unique constraint "content_task_links_pkey")
+PASS T07 polymorphic entity_id must exist (23503 content entity MATERIAL:43d4e7f9-7842-4ba9-88f4-46b34590eb3a does not exist)
+PASS T07 entity_id must exist in the table of its entity_type (a Blog id is not a Material) (23503 content entity MATERIAL:0ec7762c-26d3-4292-9d6d-307255e8feb9 does not exist)
+PASS T07 FK to existing public.tasks.id (23503 insert or update on table "content_task_links" violates foreign key constraint "content_task_links_task_id_fkey")
+PASS T07 links are insert-only (55000 content_task_links rows are immutable; insert a new version instead)
+PASS T06 content_task_links FK RESTRICT protects the operational task (23503 update or delete on table "tasks" violates foreign key constraint "content_task_links_task_id_fkey" on table "content_task_links")
+PASS T06 a Blog with dependents (Materials / Repurpose Maps) cannot be deleted (23503 update or delete on table "content_blogs" violates foreign key constraint "content_repurpose_maps_blog_id_fkey" on table "content_repurpose_maps")
+PASS T06 a Destination used by a Material / Angle link cannot be deleted (23503 update or delete on table "content_destinations" violates foreign key constraint "content_angle_destination_links_destination_id_fkey" on table "content_angle_destination_links")
+PASS T11 a Task Type version is immutable (no in-place prompt edit) (55000 content_task_type_versions rows are immutable; insert a new version instead)
+PASS T11 a Task Type version cannot be deleted (55000 content_task_type_versions rows are immutable; insert a new version instead)
+PASS T11 current version must belong to the same Task Type (23503 insert or update on table "content_task_types" violates foreign key constraint "content_task_types_current_version_fk")
+PASS T11 a prompt requires a prompt_version (23514 new row for relation "content_task_type_versions" violates check constraint "content_task_type_versions_prompt_version_check")
+PASS T11 (task_type, version) is unique (23505 duplicate key value violates unique constraint "content_task_type_versions_task_type_id_version_key")
+PASS T11 a run cannot use a DRAFT template version (23514 a workflow run must use a PUBLISHED template version)
+PASS T11 current template version must be PUBLISHED (23514 current workflow template version must be PUBLISHED)
+PASS T11 a step cannot depend on itself (23514 new row for relation "content_workflow_step_dependencies" violates check constraint "content_workflow_step_dependencies_check")
+PASS T11 PUBLISHED version becomes current
+PASS T11 a published template version is immutable (55000 published workflow template versions are immutable)
+PASS T11 no step can be added to a published version (55000 steps of a published workflow template version are immutable)
+PASS T11 published dependencies are immutable (55000 steps of a published workflow template version are immutable)
+PASS T11 dependencies cannot cross template versions (23503 insert or update on table "content_workflow_step_dependencies" violates foreign key constraint "content_workflow_step_depende_template_version_id_depends__fkey")
+PASS T09 run root entity must exist (23503 root content entity MATERIAL:9148c455-b7d9-4130-b9f9-dae6cd66ff87 does not exist)
+PASS T11 task keeps its pinned Task Type v1 although v2 is current
+PASS T09 one Shoot -> many Edit/Cover/Caption (concrete task_id lineage)
+PASS T09 Head Review -> the SAME Blog task (revision returns to it)
+PASS T09 Publish -> Publish Check lineage
+PASS T09 a task cannot be its own source (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_no_self_lineage_check")
+PASS T10 SKIPPED requires a skip reason (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_skipped_needs_reason_check")
+PASS T10 field_values must be a JSON object (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_field_values_check")
+PASS T10 a workflow step requires its run (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_step_needs_run_check")
+PASS T10 a run is always stored with its pinned template version (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_run_version_pair_check")
+PASS T10 a step must belong to the run's pinned template version (23503 insert or update on table "content_task_runtime" violates foreign key constraint "content_task_runtime_workflow_template_version_id_workflow_fkey")
+PASS T10 runtime is keyed by an EXISTING public.tasks.id (23503 insert or update on table "content_task_runtime" violates foreign key constraint "content_task_runtime_task_id_fkey")
+PASS T10 SKIPPED with reason is accepted
+PASS T12 named links keep a stable order
+PASS T12 link URL must be http(s) (23514 new row for relation "content_task_url_links" violates check constraint "content_task_url_links_url_check")
+PASS T12 one link per position (23505 duplicate key value violates unique constraint "content_task_url_links_task_id_position_key")
+PASS T15 two successful channels feed ONE Material-level review
+PASS T15 one result review per Material (23505 duplicate key value violates unique constraint "content_material_result_reviews_pkey")
+PASS T15 a publish task is a source once (23505 duplicate key value violates unique constraint "content_material_result_review_sources_pkey")
+PASS T15 review sources are append-only (55000 content_material_result_review_sources rows are immutable; insert a new version instead)
+PASS T13 retry with same key + same request returns the same task (created=false)
+PASS T13 retries never duplicate the task
+PASS T13 same key + different request conflicts (23505 IDEMPOTENCY_KEY_REUSED: CREATE_TASK key req-0001 was used for a different request)
+PASS T13 the conflicting request created nothing
+PASS T13 one Publish Check per scheduled Publish task (reconciler rerun)
+PASS T13 exactly one automatic Learning per Material (reconciler rerun)
+PASS T13 created through the existing creation path (TASK_CREATED event per task, none for retries)
+PASS T13 unknown purpose rejected (23514 new row for relation "content_os_idempotency_keys" violates check constraint "content_os_idempotency_keys_purpose_check")
+PASS T13 the ledger is insert-only (55000 content_os_idempotency_keys rows are immutable; insert a new version instead)
+PASS T13 existing creation rules still apply (inactive assignee rejected) (22023 assignee is not active)
+PASS T13 a failed create leaves no idempotency claim behind
+PASS T16 one ACTIVE mapping per provider/tenant/subject (23505 duplicate key value violates unique constraint "external_identity_links_one_active_idx")
+PASS T16 provider restricted to OPENAI_SIWC (23514 new row for relation "external_identity_links" violates check constraint "external_identity_links_provider_check")
+PASS T16 a mapping cannot be silently rewritten (55000 identity link mapping cannot be rewritten; revoke and link again)
+PASS T16 revocation requires who/when/why (23514 new row for relation "external_identity_links" violates check constraint "external_identity_links_revocation_check")
+PASS T16 history kept: revoked row + new active row
+PASS T16 links are never deleted (55000 identity links are never deleted; revoke instead)
+PASS T16 a disabled user fails actor resolution
+PASS T17 RLS enabled on every new table
+PASS T17 no policies (fail-closed for anon/authenticated)
+PASS T17 anon/authenticated have no table privilege on any new table
+PASS T17 service_role cannot DELETE content entities, runtime, links, history or identity links
+PASS T17 idempotent create RPC: EXECUTE for service_role only
+PASS T18 every new function is SECURITY INVOKER with search_path pinned
+PASS T17 anon is denied (42501 permission denied for table content_materials)
+PASS T17 authenticated is denied (42501 permission denied for table content_task_runtime)
+PASS T17 service_role (trusted server) can write
+PASS T17 service_role cannot hard-delete content (42501 permission denied for table content_domains)
+ALL CONTRACT TESTS PASSED
+
+=== 3. concurrency: 12 parallel idempotent creates with the SAME key
+distinct task ids returned: 1, tasks created: 1, ledger rows: 1
+PASS T14 concurrent same-key calls create exactly one task
+
+=== 4. rollback on a database WITH data, then recreate
+after rollback: content relations left: 0, content functions left: 0, fingerprint: 402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+operational tasks kept after rollback: 17 (Content OS-created tasks stay ordinary tasks)
+PASS rollback removes every Content OS object and leaves the task-bot catalog identical
+  apply draft 20261009100000_content_os_00_helpers.sql
+  apply draft 20261009100100_content_os_01_content_entities.sql
+  apply draft 20261009100200_content_os_02_task_config.sql
+  apply draft 20261009100300_content_os_03_task_runtime.sql
+  apply draft 20261009100400_content_os_04_idempotency.sql
+  apply draft 20261009100500_content_os_05_external_identity_links.sql
+PASS recreate after rollback (same database, existing operational data)
+
+=== 5. second independent fresh apply + full test run (db dryrun_b)
+NOTICE:  database "dryrun_b" does not exist, skipping
+PASS lines on dryrun_b: 85, FAIL/ERROR lines: 0
+
+=== 6. task-bot repo untouched
+task-bot migrations md5 after: 940438a9e036cf02d1ccacfc23972333, dirty files: 0
+PASS task-bot migrations byte-identical
+
+DRY-RUN COMPLETE

@@ -382,12 +382,21 @@ Follow the task-bot house pattern exactly (fail-closed):
   can read/write nothing even if a grant slips in.
 - `REVOKE ALL … FROM public, anon, authenticated` on every table and function.
 - `service_role` (trusted server only, never shipped to a browser):
-  - content entities / runtime / links / url links / suggestions / result
-    reviews: SELECT, INSERT, UPDATE — **no DELETE**;
-  - config versions, step tables, idempotency ledger, review sources:
-    SELECT, INSERT only (+ UPDATE on template versions for DRAFT→PUBLISHED and
-    on identity rows for `current_version_id` / `is_active`);
-  - `external_identity_links`: SELECT, INSERT, UPDATE (revocation only).
+  - content entities, `content_task_runtime`, task types / workflow template
+    identity rows, `content_material_result_reviews`: SELECT, INSERT, UPDATE
+    — **no DELETE**;
+  - immutable history: `content_task_type_versions`,
+    `content_material_result_review_sources`, `content_angle_destination_links`,
+    `content_task_links`, `content_workflow_runs`, `content_task_type_suggestions`,
+    `content_os_idempotency_keys`: SELECT, INSERT only (plus an immutability
+    trigger where rows must never change);
+  - workflow template versions / steps / dependencies: SELECT, INSERT,
+    UPDATE, DELETE, but a trigger allows changes **only while the version is
+    DRAFT** (PUBLISHED is frozen);
+  - `content_task_url_links`: SELECT, INSERT, UPDATE, DELETE (an editable,
+    ordered list in Task Detail);
+  - `external_identity_links`: SELECT, INSERT, UPDATE; a trigger allows only
+    setting `verified_at` or ACTIVE→REVOKED, and rejects DELETE.
 - New RPC: EXECUTE to service_role only. New trigger functions live in
   `private` (already USAGE-granted to service_role only).
 - Not exposed to the client: Content OS reads through its own server.
@@ -471,6 +480,10 @@ All run strictly **after** the 8 task-bot migrations; none edits them.
 9. `tenant_key` source for SIWC subjects.
 
 ## T. SAFE_TO_DRAFT_MIGRATIONS = **YES**
+
+Sprint 8B result (separate commit): drafts in `supabase/content-os-drafts/`,
+dry-run on a disposable local PostgreSQL 17.11 — see
+`supabase/content-os-drafts/dry-run/DRY_RUN_EVIDENCE.log`.
 
 Drafting and dry-running locally is safe: drafts are additive, live outside
 the task-bot repo, and are exercised only on a disposable local PostgreSQL 17
