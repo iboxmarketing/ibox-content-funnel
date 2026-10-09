@@ -281,6 +281,17 @@ export function TaskDetail({
             </div>
           )}
 
+          {instance.status === "REVISION" && (() => {
+            const last = [...instance.reviewEvents].reverse().find((event) => event.kind === "REVISION_REQUESTED");
+            return last ? (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <p className="font-bold">Revision so’raldi</p>
+                {last.note && <p className="mt-0.5 whitespace-pre-wrap">{last.note}</p>}
+                <p className="mt-1 text-[11px] text-amber-700">Tuzating va “Resubmit” bosing — o’sha review task’ga qaytadi.</p>
+              </div>
+            ) : null;
+          })()}
+
           {sourceInstance && (
             <button type="button" onClick={() => onOpenInstance(sourceInstance.id)} className="text-[11px] font-medium text-blue-700 underline-offset-2 hover:underline">
               ← Manba task: {sourceInstance.title}

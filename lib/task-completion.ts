@@ -22,6 +22,13 @@
  * REVIEW on submit; Request revision moves the SAME task to REVISION;
  * resubmitting returns it to REVIEW; Approve runs the completion outcome.
  * No revision TaskInstance, no APPROVED / PENDING_REVIEW status.
+ *
+ * Sprint 7.1 -- review by a SEPARATE task (Head Review -> Blog): a handler
+ * declaring `reviewsSourceTask` decides on its source task. Choosing the
+ * revision value returns SOURCE_REVISION_REQUESTED (source DONE ->
+ * REVISION, reviewer -> BLOCKED). Completing the corrected source returns
+ * RESUBMITTED_TO_REVIEWER (source -> DONE, the SAME reviewer -> ASSIGNED).
+ * Approve is an ordinary completion of the reviewer.
  */
 import { validateTaskInstanceForCompletion, type CompletionValidationError } from "./task-instance";
 import { effectiveRequiredFields, effectiveReviewRequired } from "./workflow-template";
@@ -29,7 +36,9 @@ import type { FieldDefinition } from "./task-type";
 import type { ContentEntityAction } from "./content-entity-store";
 import {
   resolveRuntimeHandler,
+  resubmissionFollowUpPlan,
   runTaskCompletion,
+  waitingSourceReviewer,
   runtimeCompletionErrors,
   type TaskRuntimeCompletionResult,
   type TaskRuntimeContext,
@@ -48,6 +57,8 @@ export type CompletionDecision =
   | { readonly kind: "BLOCKED"; readonly errors: readonly CompletionValidationError[] }
   | { readonly kind: "SUBMITTED_FOR_REVIEW"; readonly entityActions: readonly ContentEntityAction[] }
   | { readonly kind: "REVISION_REQUESTED" }
+  | { readonly kind: "SOURCE_REVISION_REQUESTED"; readonly sourceTaskId: string; readonly decisionFieldId: string; readonly note: string }
+  | { readonly kind: "RESUBMITTED_TO_REVIEWER"; readonly reviewerTaskId: string; readonly decisionFieldId: string; readonly result: TaskRuntimeCompletionResult }
   | { readonly kind: "COMPLETED"; readonly result: TaskRuntimeCompletionResult };
 
 function currentStep(context: TaskRuntimeContext) {
@@ -77,6 +88,7 @@ export function getCompletionState(context: TaskRuntimeContext): CompletionState
   if (status === "REVIEW") return { errors: [], action: "AWAITING_REVIEW" };
   const errors = allErrors(context);
   if (isReviewRequiredFor(context)) return { errors, action: status === "REVISION" ? "RESUBMIT" : "SUBMIT_FOR_REVIEW" };
+  if (status === "REVISION" && waitingSourceReviewer(context)) return { errors, action: "RESUBMIT" };
   return { errors, action: "COMPLETE" };
 }
 
@@ -86,7 +98,19 @@ export function requestTaskCompletion(context: TaskRuntimeContext, now: () => st
   if (state.action === "AWAITING_REVIEW") return { kind: "BLOCKED", errors: [{ code: "MISSING_REQUIRED_FIELD", message: "Task review kutmoqda — avval Head qaror qiladi." }] };
   if (state.errors.length) return { kind: "BLOCKED", errors: state.errors };
   if (state.action === "SUBMIT_FOR_REVIEW" || state.action === "RESUBMIT") {
+    if (!isReviewRequiredFor(context)) {
+      const waiting = waitingSourceReviewer(context);
+      if (waiting) {
+        const result = { entityActions: [], taskDrafts: [], plan: resubmissionFollowUpPlan(context), completeNow: true };
+        return { kind: "RESUBMITTED_TO_REVIEWER", reviewerTaskId: waiting.reviewer.id, decisionFieldId: waiting.config.decisionFieldId, result };
+      }
+    }
     return { kind: "SUBMITTED_FOR_REVIEW", entityActions: resolveRuntimeHandler(context.taskType.name).onSubmitForReview?.(context) ?? [] };
+  }
+  const sourceReview = resolveRuntimeHandler(context.taskType.name).reviewsSourceTask;
+  if (sourceReview && context.instance.sourceTaskId && context.instance.fieldValues[sourceReview.decisionFieldId] === sourceReview.revisionValue) {
+    const note = context.instance.fieldValues[sourceReview.noteFieldId];
+    return { kind: "SOURCE_REVISION_REQUESTED", sourceTaskId: context.instance.sourceTaskId, decisionFieldId: sourceReview.decisionFieldId, note: typeof note === "string" ? note : "" };
   }
   return { kind: "COMPLETED", result: runTaskCompletion(context, now) };
 }

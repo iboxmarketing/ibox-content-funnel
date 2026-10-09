@@ -15,7 +15,10 @@ import {
   removeAtomicIdeaDraft,
   removeCustomFieldFromInstance,
   recordReviewApproval,
+  reopenTaskForRevision,
   requestTaskRevision,
+  resubmitRevisedTask,
+  setReviewerWaiting,
   setTaskInstanceAssignee,
   setTaskInstanceDeadline,
   setTaskInstanceFieldValue,
@@ -51,6 +54,12 @@ export type TaskRuntimeAction =
   | { readonly type: "SUBMIT_FOR_REVIEW"; readonly instanceId: string }
   | { readonly type: "APPROVE_REVIEW"; readonly instanceId: string; readonly note: string }
   | { readonly type: "REQUEST_REVISION"; readonly instanceId: string; readonly note: string }
+  /** Sprint 7.1: a reviewer task sends its DONE source task back (source
+   * -> REVISION, reviewer -> BLOCKED), atomically. */
+  | { readonly type: "REQUEST_SOURCE_REVISION"; readonly reviewerId: string; readonly sourceId: string; readonly decisionFieldId: string; readonly note: string }
+  /** ...and the corrected source is resubmitted to that SAME reviewer
+   * (source -> DONE, reviewer -> ASSIGNED with its decision cleared). */
+  | { readonly type: "RESUBMIT_TO_REVIEWER"; readonly sourceId: string; readonly reviewerId: string; readonly decisionFieldId: string }
   | { readonly type: "SET_DEADLINE"; readonly instanceId: string; readonly deadline: string | null }
   | { readonly type: "SET_ASSIGNEE"; readonly instanceId: string; readonly assignee: string | null }
   | { readonly type: "SET_FIELD_VALUE"; readonly instanceId: string; readonly fieldId: string; readonly value: FieldValue }
@@ -92,6 +101,16 @@ export function taskRuntimeReducer(state: TaskRuntimeState, action: TaskRuntimeA
     case "REQUEST_REVISION": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;
       return withInstance(state, action.instanceId, (instance) => requestTaskRevision(instance, action.note, now));
+    }
+    case "REQUEST_SOURCE_REVISION": {
+      if (!state.instances.some((i) => i.id === action.reviewerId) || !state.instances.some((i) => i.id === action.sourceId)) return state;
+      const reopened = withInstance(state, action.sourceId, (instance) => reopenTaskForRevision(instance, action.note, now));
+      return withInstance(reopened, action.reviewerId, (instance) => setReviewerWaiting(instance, action.decisionFieldId, true, now));
+    }
+    case "RESUBMIT_TO_REVIEWER": {
+      if (!state.instances.some((i) => i.id === action.reviewerId) || !state.instances.some((i) => i.id === action.sourceId)) return state;
+      const resubmitted = withInstance(state, action.sourceId, (instance) => resubmitRevisedTask(instance, now));
+      return withInstance(resubmitted, action.reviewerId, (instance) => setReviewerWaiting(instance, action.decisionFieldId, false, now));
     }
     case "SET_DEADLINE": {
       if (!state.instances.some((instance) => instance.id === action.instanceId)) return state;

@@ -59,8 +59,11 @@ test("role exceptions from the approved methodology are reflected: SEO/Shoot/Edi
   assert.deepEqual(performance.defaultAssigneeRule, { kind: "FIXED_ROLE", role: "Digital marketer" });
 });
 
-test("Blog requires Head review per the approved methodology", () => {
-  assert.equal(findTaskTypeFixtureByName("Blog").reviewRequired, true);
+test("Sprint 7.1: Blog is NOT reviewRequired -- the separate Head Review task is its only review", () => {
+  assert.equal(findTaskTypeFixtureByName("Blog").reviewRequired, false);
+  const headReview = findTaskTypeFixtureByName("Head Review");
+  assert.equal(headReview.reviewRequired, false);
+  assert.deepEqual(headReview.requiredFields.find((f) => f.id === "review-decision").options.map((o) => o.value), ["Approved", "Revision requested"]);
 });
 
 // --- Qoldiq noto'g'ri workflow fixture ---

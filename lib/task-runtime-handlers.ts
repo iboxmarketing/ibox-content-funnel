@@ -97,6 +97,18 @@ export interface TaskRuntimeHandler {
    * contentRef). Replaces the old view-level "first seeded Problem
    * Category" demo wiring. */
   readonly startsOn?: "PROBLEM_CATEGORY";
+  /** Sprint 7.1: this Task Type reviews the task it was generated from
+   * (its `sourceTaskId`, e.g. Head Review -> Blog). Choosing
+   * `revisionValue` sends that SAME source task back to REVISION and parks
+   * this reviewer (BLOCKED) until the source is resubmitted to it. */
+  readonly reviewsSourceTask?: SourceTaskReviewConfig;
+}
+
+export interface SourceTaskReviewConfig {
+  readonly decisionFieldId: string;
+  readonly approveValue: string;
+  readonly revisionValue: string;
+  readonly noteFieldId: string;
 }
 
 const NO_EFFECT: Omit<TaskRuntimeCompletionResult, "completeNow"> = { entityActions: [], taskDrafts: [], plan: null };
@@ -332,9 +344,58 @@ const publishCheckHandler: TaskRuntimeHandler = {
   },
 };
 
+// --- Head Review (Sprint 7.1): a separate review task, not Blog.reviewRequired ---
+
+export const HEAD_REVIEW_DECISION: SourceTaskReviewConfig = {
+  decisionFieldId: "review-decision",
+  approveValue: "Approved",
+  revisionValue: "Revision requested",
+  noteFieldId: "review-note",
+};
+
+const headReviewHandler: TaskRuntimeHandler = {
+  reviewsSourceTask: HEAD_REVIEW_DECISION,
+  // Only a DONE source can be reviewed; while it is being corrected the
+  // reviewer waits. Approve then runs the normal workflow follow-up.
+  validateCompletion: ({ instance, allInstances }) => {
+    const source = instance.sourceTaskId ? allInstances.find((i) => i.id === instance.sourceTaskId) : undefined;
+    if (!source) return [{ code: "INVALID_FIELD_VALUE", message: "Review qilinadigan manba task topilmadi." }];
+    if (source.status !== "DONE") return [{ code: "INVALID_FIELD_VALUE", message: `Manba task tuzatilmoqda (${source.status}) — u qayta topshirilgach review qiling.` }];
+    return [];
+  },
+};
+
+/** The reviewer task currently waiting for `context.instance` to be
+ * corrected and resubmitted, if any. */
+export function waitingSourceReviewer(context: TaskRuntimeContext): { readonly reviewer: TaskInstance; readonly config: SourceTaskReviewConfig } | null {
+  for (const candidate of context.allInstances) {
+    if (candidate.sourceTaskId !== context.instance.id || candidate.status !== "BLOCKED") continue;
+    const config = resolveRuntimeHandler(context.taskTypesById.get(candidate.taskTypeId)?.name ?? "").reviewsSourceTask;
+    if (config) return { reviewer: candidate, config };
+  }
+  return null;
+}
+
+/** Follow-up for a resubmitted source task: only steps it unlocks that do
+ * NOT already have a live task for the same content entity (its original
+ * branches exist already -- never duplicated). Lets e.g. Destination
+ * Decision still appear if Angle + Performance Consultation finished while
+ * the Blog was in revision. */
+export function resubmissionFollowUpPlan(context: TaskRuntimeContext): PreviewPlan | null {
+  const plan = followUpPlan(context);
+  if (!plan || plan.mode !== "STEP_FANOUT") return null;
+  const ref = context.instance.contentRef;
+  const exists = (stepId: string) => context.allInstances.some(
+    (i) => i.workflowStepId === stepId && i.status !== "CANCELLED" && i.contentRef?.entityType === ref?.entityType && i.contentRef?.entityId === ref?.entityId,
+  );
+  const candidates = plan.candidates.filter((c) => c.kind !== "STEP_FANOUT" || !exists(c.step.id));
+  return candidates.length ? { ...plan, candidates } : null;
+}
+
 /** THE one place special Task Type behavior is registered. */
 export const TASK_RUNTIME_HANDLERS: Readonly<Record<string, TaskRuntimeHandler>> = {
   "Problem Split": { startsOn: "PROBLEM_CATEGORY" },
+  "Head Review": headReviewHandler,
   Angle: angleHandler,
   "Destination Decision": destinationDecisionHandler,
   "Repurpose Map": repurposeMapHandler,

@@ -91,13 +91,15 @@ export const TASK_TYPE_FIXTURES: readonly TaskType[] = [
     requiredFields: [urlField("blog-link", "Blog Link", true), textField("blog-title", "Blog Title")],
     optionalFields: [longTextField("body", "Blog matni", false)],
     defaultPrompt: "Quyidagi research asosida blog qoralamasini yoz.\n\n---\nINPUT:\n",
-    reviewRequired: true,
+    // Sprint 7.1 product decision: the Blog is reviewed ONLY by the separate
+    // Head Review task (which can send this same Blog back to REVISION).
+    reviewRequired: false,
     allowedLinkLabels: ["Reference", "Final"],
   })),
   seed(draft({
     name: "Head Review",
     description: "Head tasdig'i — muhim aktivlar uchun.",
-    requiredFields: [selectField("review-decision", "Review Decision", ["Approved", "Rejected"]), longTextField("review-note", "Review Note")],
+    requiredFields: [selectField("review-decision", "Review Decision", ["Approved", "Revision requested"]), longTextField("review-note", "Review Note")],
     allowedLinkLabels: ["Reference"],
     defaultAssigneeRule: fixedRole("Head"),
   })),

@@ -60,7 +60,7 @@ function TaskRow({ instance, typeName, workingOn, onOpen }: { instance: TaskInst
 
 export function WorkflowRunView() {
   const { state: contentOsState } = useContentOsStore();
-  const { state: runtimeState, createInstances, complete, submitForReview, approveReview, requestRevision } = useTaskRuntimeStore();
+  const { state: runtimeState, createInstances, complete, submitForReview, approveReview, requestRevision, requestSourceRevision, resubmitToReviewer } = useTaskRuntimeStore();
   const contentEntityStore = useContentEntityStore();
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(contentOsState.workflowTemplates[0]?.id ?? null);
   const [openInstanceId, setOpenInstanceId] = useState<string | null>(null);
@@ -126,6 +126,18 @@ export function WorkflowRunView() {
         return;
       case "REVISION_REQUESTED":
         return; // handled with its note in handleReviewDecision
+      case "SOURCE_REVISION_REQUESTED":
+        // The reviewer sent its source back: same source task -> REVISION,
+        // this reviewer waits (BLOCKED). No new task.
+        requestSourceRevision(instance.id, decision.sourceTaskId, decision.decisionFieldId, decision.note);
+        setOpenInstanceId(null);
+        return;
+      case "RESUBMITTED_TO_REVIEWER":
+        // Corrected source goes back to the SAME reviewer task.
+        resubmitToReviewer(instance.id, decision.reviewerTaskId, decision.decisionFieldId);
+        if (decision.result.plan) { setPendingPlan(decision.result.plan); return; }
+        setOpenInstanceId(decision.reviewerTaskId);
+        return;
       case "COMPLETED": {
         const { result } = decision;
         contentEntityStore.applyActions(result.entityActions);

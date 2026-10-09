@@ -95,10 +95,10 @@ const REEL_AUTHORING = (destinationId) => ({ hook: "Hook", script: "Script", "ct
 // --- Architecture: one registry, no scattered conditionals ---
 
 test("special completion behavior is registered centrally; generic Task Types have no handler", () => {
-  for (const name of ["Angle", "Destination Decision", "Repurpose Map", "Reel Script", "Carousel", "Text Post", "YouTube", "Planning", "Shoot", "Edit"]) {
+  for (const name of ["Angle", "Destination Decision", "Repurpose Map", "Reel Script", "Carousel", "Text Post", "YouTube", "Planning", "Shoot", "Edit", "Head Review"]) {
     assert.ok(handlers.TASK_RUNTIME_HANDLERS[name], `${name} should be registered`);
   }
-  for (const name of ["Blog", "SEO", "Head Review", "Cover", "Caption", "Research"]) {
+  for (const name of ["Blog", "SEO", "Cover", "Caption", "Research"]) {
     assert.equal(handlers.TASK_RUNTIME_HANDLERS[name], undefined, `${name} must use the generic runtime`);
     assert.deepEqual(handlers.resolveRuntimeHandler(name), {});
   }

@@ -245,6 +245,32 @@ export function requestTaskRevision(instance: TaskInstance, note: string, now: (
   return { ...instance, status: "REVISION", reviewEvents: [...instance.reviewEvents, { kind: "REVISION_REQUESTED", at, note }], updatedAt: at };
 }
 
+/**
+ * Sprint 7.1: a SEPARATE reviewer task (e.g. Head Review, linked through
+ * its `sourceTaskId`) sends its already-DONE source task back. The SAME
+ * source task goes DONE -> REVISION -- no new task is created.
+ */
+export function reopenTaskForRevision(instance: TaskInstance, note: string, now: () => string = () => new Date().toISOString()): TaskInstance {
+  if (instance.status !== "DONE") return instance;
+  const at = now();
+  return { ...instance, status: "REVISION", outcome: null, reviewEvents: [...instance.reviewEvents, { kind: "REVISION_REQUESTED", at, note }], updatedAt: at };
+}
+
+/** The corrected source task is handed back to its reviewer: REVISION ->
+ * DONE again (its follow-up branches already exist). */
+export function resubmitRevisedTask(instance: TaskInstance, now: () => string = () => new Date().toISOString()): TaskInstance {
+  if (instance.status !== "REVISION") return instance;
+  const at = now();
+  return { ...instance, status: "DONE", outcome: "COMPLETED", reviewEvents: [...instance.reviewEvents, { kind: "SUBMITTED", at, note: "" }], updatedAt: at };
+}
+
+/** The reviewer task waits (BLOCKED) while its source is being corrected,
+ * and is reopened (ASSIGNED, decision cleared) on resubmission. */
+export function setReviewerWaiting(instance: TaskInstance, decisionFieldId: string, waiting: boolean, now: () => string = () => new Date().toISOString()): TaskInstance {
+  const fieldValues = waiting ? instance.fieldValues : { ...instance.fieldValues, [decisionFieldId]: null };
+  return { ...instance, status: waiting ? "BLOCKED" : "ASSIGNED", fieldValues, updatedAt: now() };
+}
+
 export function markTaskInstanceDone(instance: TaskInstance, now: () => string = () => new Date().toISOString()): TaskInstance {
   return { ...instance, status: "DONE", outcome: "COMPLETED", updatedAt: now() };
 }
