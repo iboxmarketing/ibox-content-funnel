@@ -2,6 +2,19 @@
 -- created by the drafts, in reverse order. Touches no task-bot object.
 -- Data written into these tables is lost: export first in any real rollback.
 
+-- Sprint 9B transition contract (06): predicates + provenance guards.
+drop function if exists public.content_os_completion_allowed(uuid);
+drop function if exists public.content_os_find_revision_review(uuid, uuid);
+drop function if exists public.content_os_revision_allowed(uuid, uuid, uuid);
+drop function if exists public.content_os_is_source_blog_for_head_review(uuid, uuid);
+drop function if exists public.content_os_requires_review(uuid);
+drop function if exists public.content_os_task_type_code(uuid);
+drop function if exists public.content_os_is_task(uuid);
+drop trigger if exists content_task_runtime_provenance_immutable on public.content_task_runtime;
+drop trigger if exists content_task_types_code_immutable on public.content_task_types;
+drop function if exists private.content_os_guard_runtime_provenance();
+drop function if exists private.content_os_guard_task_type_code();
+
 drop table if exists public.external_identity_links;
 drop function if exists private.content_os_guard_identity_link();
 

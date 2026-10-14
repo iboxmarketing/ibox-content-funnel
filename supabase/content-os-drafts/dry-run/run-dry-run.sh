@@ -37,6 +37,8 @@ echo "content tables created: $(sql -d dryrun_a -tAc "select count(*) from pg_ta
 
 section "2. contract tests (constraints, FKs, uniqueness, versioning, lineage, idempotency, identity, grants)"
 sql -d dryrun_a -f - < "$HERE/20_contract_tests.sql" 2>&1 | grep -E 'PASS|FAIL|ERROR|ALL CONTRACT' | sed -E 's/^psql:[^ ]* (NOTICE|ERROR):  //'
+echo "--- Sprint 9B transition contract (06)"
+sql -d dryrun_a -f - < "$HERE/25_transition_contract_tests.sql" 2>&1 | grep -E 'PASS|FAIL|ERROR|ALL TRANSITION' | sed -E 's/^psql:[^ ]* (NOTICE|ERROR):  //'
 
 section "3. concurrency: 12 parallel idempotent creates with the SAME key"
 CALL="select task_id from public.content_os_create_task_idempotent('CREATE_TASK', 'race-key-1', repeat('9', 64),
@@ -71,9 +73,27 @@ echo "PASS recreate after rollback (same database, existing operational data)"
 section "5. second independent fresh apply + full test run (db dryrun_b)"
 "$HERE/load-taskbot-baseline.sh" dryrun_b > /dev/null
 apply_drafts dryrun_b > /dev/null
-OUT_B="$(sql -d dryrun_b -f - < "$HERE/20_contract_tests.sql" 2>&1)"
+OUT_B="$(sql -d dryrun_b -f - < "$HERE/20_contract_tests.sql" 2>&1; sql -d dryrun_b -f - < "$HERE/25_transition_contract_tests.sql" 2>&1)"
 echo "PASS lines on dryrun_b: $(grep -c 'PASS ' <<< "$OUT_B"), FAIL/ERROR lines: $(grep -cE 'FAIL|ERROR' <<< "$OUT_B" || true)"
-grep -q 'ALL CONTRACT TESTS PASSED' <<< "$OUT_B" || { echo "FAIL contract tests on dryrun_b"; exit 1; }
+grep -q 'ALL CONTRACT TESTS PASSED' <<< "$OUT_B" && grep -q 'ALL TRANSITION CONTRACT TESTS PASSED' <<< "$OUT_B" || { echo "FAIL contract tests on dryrun_b"; grep -E 'FAIL|ERROR' <<< "$OUT_B"; exit 1; }
+
+section "5b. REFERENCE Task Bot transition function (docs/persistence/reference) against drafts 00..06 (db dryrun_c)"
+REFERENCE="$HERE/../../../docs/persistence/reference/transition_task_with_events.sprint9b.sql"
+"$HERE/load-taskbot-baseline.sh" dryrun_c > /dev/null
+sql -d dryrun_c --single-transaction < "$REFERENCE"
+LEGACY_NO_CO="$(sql -d dryrun_c -tA -c "insert into public.users (telegram_user_id, display_name, role, is_active) values (3999, 'h', 'DIGITAL_MARKETER', true), (3998, 'a', 'CONTENT_MARKETER', true);
+  with t as (select id from public.create_task_with_event_v2((select id from public.users where telegram_user_id = 3999), (select id from public.users where telegram_user_id = 3998), 'legacy before CO', '', 'normal', now() + interval '1 day'))
+  select (select status from public.transition_task_with_events((select id from t), (select id from public.users where telegram_user_id = 3998), 'REVIEW'))" 2>&1 | tail -1)"
+[ "$LEGACY_NO_CO" = "REVIEW" ] || { echo "FAIL reference function without Content OS schema: $LEGACY_NO_CO"; exit 1; }
+echo "PASS reference function before the Content OS schema: legacy transitions work (no content_os_* function is planned)"
+apply_drafts dryrun_c > /dev/null
+OUT_C="$(sql -d dryrun_c -f - < "$HERE/40_reference_transition_tests.sql" 2>&1)"
+grep -E 'PASS|FAIL|ERROR' <<< "$OUT_C" | sed -E 's/^(psql:[^ ]* )?(NOTICE|ERROR):  //'
+grep -q 'ALL REFERENCE TRANSITION TESTS PASSED' <<< "$OUT_C" || { echo "FAIL reference transition tests"; exit 1; }
+sql -d dryrun_c --single-transaction < "$DOWN"
+AFTER_RB="$(sql -d dryrun_c -tA -c "select status from public.transition_task_with_events((select v from ref.ids where k = 'research'), (select v from ref.ids where k = 'head'), 'ASSIGNED')" 2>&1 | tail -1)"
+[ "$AFTER_RB" = "ASSIGNED" ] || { echo "FAIL legacy transition after Content OS rollback: $AFTER_RB"; exit 1; }
+echo "PASS after Content OS rollback the reference function still runs legacy transitions (REOPEN DONE -> ASSIGNED)"
 
 section "6. task-bot repo untouched"
 BOT_MIGRATIONS_MD5_AFTER="$(cat "$BOT_REPO"/supabase/migrations/*.sql | md5sum | cut -d' ' -f1)"

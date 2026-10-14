@@ -12,6 +12,11 @@ files exist only to be dry-run on a disposable local PostgreSQL 17.
   drafts, runs `20_contract_tests.sql`, a 12-way concurrency race, rollback +
   recreate, and a second fresh apply. Requires Docker and a container named
   by `PG_CONTAINER` (default `ibox-pg-dryrun`) running `postgres:17`.
+- `dry-run/25_transition_contract_tests.sql` — Sprint 9B transition contract
+  (migration 06): Blog / Head Review provenance, reviewer authorization,
+  pinned review-required, fail-safe malformed config.
+- `dry-run/40_reference_transition_tests.sql` — proves the reference Task Bot
+  function in `docs/persistence/reference/` as real transitions.
 - `dry-run/DRY_RUN_EVIDENCE.log` — output of the last run.
 
 Why they are not under `supabase/migrations/`: this repo has no Supabase
