@@ -202,6 +202,18 @@ export class SupabaseContentOsStore implements ContentOsStore {
     await this.db.insert("content_task_links", links.map((link) => ({
       task_id: link.taskId, entity_type: link.entityType, entity_id: link.entityId, relation: link.relation,
     })), { ignoreDuplicates: true });
+    // ignore-duplicates is ON CONFLICT DO NOTHING without a target, so it would
+    // also swallow a one-PRIMARY-per-task violation. Read back and require
+    // every requested link to exist exactly as asked (same as the memory adapter).
+    for (const taskId of new Set(links.map((link) => link.taskId))) {
+      const stored = await this.linksForTask(taskId);
+      for (const link of links.filter((l) => l.taskId === taskId)) {
+        const match = stored.find((s) => s.entityType === link.entityType && s.entityId === link.entityId);
+        if (!match || match.relation !== link.relation) {
+          throw new PersistenceConflictError(`link ${link.entityType}:${link.entityId} (${link.relation}) was not stored for task ${taskId}`);
+        }
+      }
+    }
   }
 
   private toLink(row: Row): TaskLinkRecord {

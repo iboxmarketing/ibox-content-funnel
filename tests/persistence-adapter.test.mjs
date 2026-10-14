@@ -122,7 +122,7 @@ function recordingFetch(responses) {
 
 test("Supabase adapter: runtime keyed by public.tasks.id, insert-if-absent, links PRIMARY/RELATED, no tasks.content_ref", async () => {
   const runtimeRow = { task_id: "t1", task_type_version_id: "v1", workflow_run_id: null, workflow_template_version_id: null, workflow_step_id: null, source_task_id: "b1", outcome: null, skip_reason: null, field_values: {} };
-  const { fetch, calls } = recordingFetch([{ status: 201 }, { status: 200, body: [runtimeRow] }, { status: 201 }]);
+  const { fetch, calls } = recordingFetch([{ status: 201 }, { status: 200, body: [runtimeRow] }, { status: 201 }, { status: 200, body: [{ task_id: "t1", entity_type: "BLOG", entity_id: "e1", relation: "PRIMARY" }] }]);
   const store = new SupabaseContentOsStore(new PostgrestClient({ baseUrl: "https://example.supabase.co/", serviceRoleKey: "test-key", fetch }));
   const stored = await store.ensureRuntime({ taskId: "t1", taskTypeVersionId: "v1", workflowRunId: null, workflowTemplateVersionId: null, workflowStepId: null, sourceTaskId: "b1", outcome: null, skipReason: null, fieldValues: {} });
   assert.equal(stored.sourceTaskId, "b1");
@@ -135,6 +135,12 @@ test("Supabase adapter: runtime keyed by public.tasks.id, insert-if-absent, link
   await store.ensureLinks([{ taskId: "t1", entityType: "BLOG", entityId: "e1", relation: "PRIMARY" }]);
   assert.deepEqual(calls[2].body, [{ task_id: "t1", entity_type: "BLOG", entity_id: "e1", relation: "PRIMARY" }]);
   assert.ok(calls.every((call) => !JSON.stringify(call).includes("content_ref")));
+});
+
+test("Supabase store: a link silently dropped by ignore-duplicates (e.g. a second PRIMARY) is detected", async () => {
+  const { fetch } = recordingFetch([{ status: 201 }, { status: 200, body: [{ task_id: "t1", entity_type: "KNOWLEDGE_NODE", entity_id: "n1", relation: "PRIMARY" }] }]);
+  const store = new SupabaseContentOsStore(new PostgrestClient({ baseUrl: "https://example.supabase.co", serviceRoleKey: "test-key", fetch }));
+  await assert.rejects(() => store.ensureLinks([{ taskId: "t1", entityType: "BLOG", entityId: "e1", relation: "PRIMARY" }]), /was not stored/);
 });
 
 test("Supabase gateway: tasks only via the idempotent RPC and transition_task_with_events; Postgres errors surface", async () => {
