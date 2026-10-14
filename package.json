@@ -47,6 +47,7 @@
     "test:distribution": "node --test tests/distribution.test.mjs",
     "test:v1-stabilization": "node --test tests/v1-stabilization.test.mjs",
     "test:head-review": "node --test tests/head-review.test.mjs",
+    "test:persistence-adapter": "node --test tests/persistence-adapter.test.mjs",
     "test:material-production": "node --test tests/material-production.test.mjs",
     "test:task-runtime-handlers": "node --test tests/task-runtime-handlers.test.mjs"
   },
