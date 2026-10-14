@@ -56,7 +56,7 @@ create trigger external_identity_links_set_updated_at before update on public.ex
   for each row execute function private.set_updated_at();
 
 alter table public.external_identity_links enable row level security;
-revoke all on table public.external_identity_links from public, anon, authenticated;
+revoke all on table public.external_identity_links from public, anon, authenticated, service_role;
 grant select, insert, update on table public.external_identity_links to service_role;
 
 comment on table public.external_identity_links is

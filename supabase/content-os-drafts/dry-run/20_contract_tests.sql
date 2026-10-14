@@ -334,6 +334,19 @@ select dryrun.ok(not exists (
       'content_material_result_reviews', 'content_material_result_review_sources')
     and has_table_privilege('service_role', c.oid, 'DELETE')
 ), 'T17 service_role cannot DELETE content entities, runtime, links, history or identity links');
+
+select dryrun.ok(not exists (
+  select 1
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  cross join (values ('anon'), ('authenticated'), ('service_role')) r(role)
+  cross join (values ('TRUNCATE'), ('REFERENCES'), ('TRIGGER'), ('MAINTAIN')) p(priv)
+  where n.nspname = 'public'
+    and c.relkind in ('r', 'p')
+    and (c.relname like 'content_%' or c.relname = 'external_identity_links')
+    and has_table_privilege(r.role, c.oid, p.priv)
+), 'T17 Supabase default table privileges are stripped from Content OS tables');
+
 select dryrun.ok(not has_function_privilege('anon', 'public.content_os_create_task_idempotent(text, text, text, uuid, uuid, text, text, text, timestamptz)', 'EXECUTE')
   and not has_function_privilege('authenticated', 'public.content_os_create_task_idempotent(text, text, text, uuid, uuid, text, text, text, timestamptz)', 'EXECUTE')
   and has_function_privilege('service_role', 'public.content_os_create_task_idempotent(text, text, text, uuid, uuid, text, text, text, timestamptz)', 'EXECUTE'),

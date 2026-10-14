@@ -195,7 +195,7 @@ begin
     'content_workflow_template_versions', 'content_workflow_steps', 'content_workflow_step_dependencies'
   ] loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on table public.%I from public, anon, authenticated', t);
+    execute format('revoke all on table public.%I from public, anon, authenticated, service_role', t);
   end loop;
 end $$;
 

@@ -13,14 +13,14 @@ apply task-bot 20260906163500_telegram_username_integrity.sql
 apply task-bot 20260909090000_next_product_phase.sql
 apply task-bot 20260909200000_reminders_and_membership.sql
 apply task-bot 20260914090000_autostart_tasks.sql
-task-bot fingerprint before drafts: 402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+task-bot fingerprint before drafts: 438 objects, md5 2d9aa71121b2887bfbd86d06c9787eae
   apply draft 20261009100000_content_os_00_helpers.sql
   apply draft 20261009100100_content_os_01_content_entities.sql
   apply draft 20261009100200_content_os_02_task_config.sql
   apply draft 20261009100300_content_os_03_task_runtime.sql
   apply draft 20261009100400_content_os_04_idempotency.sql
   apply draft 20261009100500_content_os_05_external_identity_links.sql
-task-bot fingerprint after drafts:  402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+task-bot fingerprint after drafts:  438 objects, md5 2d9aa71121b2887bfbd86d06c9787eae
 PASS T01 task-bot catalog objects unchanged by the drafts
 content tables created: 27
 
@@ -42,8 +42,8 @@ PASS T07 reverse lookup: one Material has many tasks (incl. the shared Shoot)
 PASS T07 one entity shared by several tasks
 PASS T07 at most one PRIMARY entity per task (23505 duplicate key value violates unique constraint "content_task_links_one_primary_idx")
 PASS T07 idempotent uniqueness (same link twice) (23505 duplicate key value violates unique constraint "content_task_links_pkey")
-PASS T07 polymorphic entity_id must exist (23503 content entity MATERIAL:43d4e7f9-7842-4ba9-88f4-46b34590eb3a does not exist)
-PASS T07 entity_id must exist in the table of its entity_type (a Blog id is not a Material) (23503 content entity MATERIAL:0ec7762c-26d3-4292-9d6d-307255e8feb9 does not exist)
+PASS T07 polymorphic entity_id must exist (23503 content entity MATERIAL:1e5b8c31-a2d6-4058-a692-82e55ee1057c does not exist)
+PASS T07 entity_id must exist in the table of its entity_type (a Blog id is not a Material) (23503 content entity MATERIAL:3b445e6b-6405-4b2a-95e9-b38ac00cb439 does not exist)
 PASS T07 FK to existing public.tasks.id (23503 insert or update on table "content_task_links" violates foreign key constraint "content_task_links_task_id_fkey")
 PASS T07 links are insert-only (55000 content_task_links rows are immutable; insert a new version instead)
 PASS T06 content_task_links FK RESTRICT protects the operational task (23503 update or delete on table "tasks" violates foreign key constraint "content_task_links_task_id_fkey" on table "content_task_links")
@@ -62,7 +62,7 @@ PASS T11 a published template version is immutable (55000 published workflow tem
 PASS T11 no step can be added to a published version (55000 steps of a published workflow template version are immutable)
 PASS T11 published dependencies are immutable (55000 steps of a published workflow template version are immutable)
 PASS T11 dependencies cannot cross template versions (23503 insert or update on table "content_workflow_step_dependencies" violates foreign key constraint "content_workflow_step_depende_template_version_id_depends__fkey")
-PASS T09 run root entity must exist (23503 root content entity MATERIAL:9148c455-b7d9-4130-b9f9-dae6cd66ff87 does not exist)
+PASS T09 run root entity must exist (23503 root content entity MATERIAL:8ba38176-520a-446b-8584-bd95543440fc does not exist)
 PASS T11 task keeps its pinned Task Type v1 although v2 is current
 PASS T09 one Shoot -> many Edit/Cover/Caption (concrete task_id lineage)
 PASS T09 Head Review -> the SAME Blog task (revision returns to it)
@@ -104,6 +104,7 @@ PASS T17 RLS enabled on every new table
 PASS T17 no policies (fail-closed for anon/authenticated)
 PASS T17 anon/authenticated have no table privilege on any new table
 PASS T17 service_role cannot DELETE content entities, runtime, links, history or identity links
+PASS T17 Supabase default table privileges are stripped from Content OS tables
 PASS T17 idempotent create RPC: EXECUTE for service_role only
 PASS T18 every new function is SECURITY INVOKER with search_path pinned
 PASS T17 anon is denied (42501 permission denied for table content_materials)
@@ -117,7 +118,7 @@ distinct task ids returned: 1, tasks created: 1, ledger rows: 1
 PASS T14 concurrent same-key calls create exactly one task
 
 === 4. rollback on a database WITH data, then recreate
-after rollback: content relations left: 0, content functions left: 0, fingerprint: 402 objects, md5 c94565f6136f57b04fee9fdeaa441971
+after rollback: content relations left: 0, content functions left: 0, fingerprint: 438 objects, md5 2d9aa71121b2887bfbd86d06c9787eae
 operational tasks kept after rollback: 17 (Content OS-created tasks stay ordinary tasks)
 PASS rollback removes every Content OS object and leaves the task-bot catalog identical
   apply draft 20261009100000_content_os_00_helpers.sql
@@ -129,8 +130,7 @@ PASS rollback removes every Content OS object and leaves the task-bot catalog id
 PASS recreate after rollback (same database, existing operational data)
 
 === 5. second independent fresh apply + full test run (db dryrun_b)
-NOTICE:  database "dryrun_b" does not exist, skipping
-PASS lines on dryrun_b: 85, FAIL/ERROR lines: 0
+PASS lines on dryrun_b: 86, FAIL/ERROR lines: 0
 
 === 6. task-bot repo untouched
 task-bot migrations md5 after: 940438a9e036cf02d1ccacfc23972333, dirty files: 0

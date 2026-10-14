@@ -17,7 +17,7 @@ create trigger content_os_idempotency_keys_immutable before update or delete on 
   for each row execute function private.content_os_prevent_mutation();
 
 alter table public.content_os_idempotency_keys enable row level security;
-revoke all on table public.content_os_idempotency_keys from public, anon, authenticated;
+revoke all on table public.content_os_idempotency_keys from public, anon, authenticated, service_role;
 grant select, insert on table public.content_os_idempotency_keys to service_role;
 
 -- One transaction: lock the key, return the existing task for an identical

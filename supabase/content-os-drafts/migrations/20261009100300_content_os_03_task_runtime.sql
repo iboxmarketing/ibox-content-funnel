@@ -177,7 +177,7 @@ begin
     'content_workflow_runs', 'content_task_runtime', 'content_task_links', 'content_task_url_links', 'content_task_type_suggestions'
   ] loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on table public.%I from public, anon, authenticated', t);
+    execute format('revoke all on table public.%I from public, anon, authenticated, service_role', t);
   end loop;
 end $$;
 

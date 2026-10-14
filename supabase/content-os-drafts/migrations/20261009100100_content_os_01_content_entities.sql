@@ -232,7 +232,7 @@ begin
     'content_material_result_reviews', 'content_material_result_review_sources'
   ] loop
     execute format('alter table public.%I enable row level security', t);
-    execute format('revoke all on table public.%I from public, anon, authenticated', t);
+    execute format('revoke all on table public.%I from public, anon, authenticated, service_role', t);
   end loop;
 end $$;
 
