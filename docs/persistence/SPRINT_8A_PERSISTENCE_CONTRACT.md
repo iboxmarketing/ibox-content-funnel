@@ -507,6 +507,7 @@ idempotent on `legacy_ref` (partial unique index).
 4. `content_os_03_task_runtime` — workflow runs, task runtime, content_task_links (+ entity validation), url links, suggestions.
 5. `content_os_04_idempotency` — ledger + `content_os_create_task_idempotent`.
 6. `content_os_05_external_identity_links` — task-bot-owned; may land in that repo instead.
+6b. `content_os_06_transition_contract` (Sprint 9B) — write-once provenance guards + Content OS-owned transition predicates (`docs/persistence/SPRINT_9_TRANSITION_CONTRACT.md`).
 7. `content_os_99_down` — rollback (dry-run only).
 
 All run strictly **after** the 8 task-bot migrations; none edits them.

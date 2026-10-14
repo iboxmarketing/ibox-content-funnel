@@ -68,6 +68,11 @@ transitions must not become available to ordinary Telegram tasks. Options:
 Recommendation: option 1 (rule enforced in the same transaction as the
 status change), sequenced A-review → B1 → A2 deploy.
 
+**Sprint 9B update:** the exact predicates now exist as Content OS-owned
+SQL functions (draft migration 06) and the narrowed DONE → REVISION rule
+(only via the source Blog's open Head Review) is specified, with a
+dry-run-proven reference function, in `SPRINT_9_TRANSITION_CONTRACT.md`.
+
 ### A3. Revision behavior required by Content OS
 
 - Who may move a DONE Blog to REVISION: Head, or the authorized reviewer
