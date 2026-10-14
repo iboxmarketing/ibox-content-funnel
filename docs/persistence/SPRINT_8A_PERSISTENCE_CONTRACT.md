@@ -1,6 +1,8 @@
 # IBOX Content OS V1 — Sprint 8A Persistence Contract
 
-Status: **DESIGN ONLY.** Nothing in this document has been applied anywhere.
+Status: **DESIGN + LOCAL DRY-RUN ONLY.** Nothing in this document has been
+applied to Supabase. Sprint 8 is closed — see §U (closeout) and §T (gates);
+the next sprint plan is `docs/persistence/SPRINT_9_TASK_BOT_INTEGRATION_PLAN.md`.
 Content OS commit audited: `2cbc1ef`. Task-bot commit audited: `1c7bb32`
 (`integration/content-os-auth-bridge`). Supabase project:
 `cbjcclefgxrdyjwkjcpq` (production, authoritative task backend).
@@ -26,53 +28,121 @@ Content OS side. Nothing here changes task-bot application behavior.
 
 ## B. LIVE_SUPABASE_PARITY
 
-**Live catalog was NOT inspected.** This session has no project-scoped
-Supabase access: no Supabase connector/tool, no `supabase` CLI, no `psql`
-on the host, and no credentials in the environment. Nothing below about the
-live database is inferred.
+**Live catalog inspected read-only on 2026-10-14** using the dedicated
+`content_os_auditor` role. The role connects with
+`default_transaction_read_only = on`; no production mutation was performed.
 
-| Object group (12 tables in scope) | Live status |
+Target live database: the existing Supabase task-bot project.
+
+### Result
+
+| Object group (12 task-bot tables in scope) | Live result |
 |---|---|
-| columns, PK, FK + actions, CHECK names, UNIQUE, indexes + predicates | **UNKNOWN** |
-| triggers, functions/RPC signatures, SECURITY DEFINER/INVOKER, `search_path` | **UNKNOWN** |
-| table grants, routine grants, schema privileges, default privileges | **UNKNOWN** |
-| RLS enabled/forced, policies | **UNKNOWN** |
-| applied migration ledger | **UNKNOWN** |
+| tables | **MATCH — 12** |
+| columns | **MATCH — 118** |
+| PK / FK + actions / UNIQUE / CHECK constraints | **MATCH — 91** |
+| indexes + partial predicates | **MATCH — 34** |
+| functions / RPC signatures / security / search_path / volatility | **MATCH — 18** |
+| triggers | **MATCH after pg_catalog verification — 8 trigger objects / 11 trigger-event rows** |
+| RLS | **MATCH — enabled on all 12, not forced** |
+| RLS policies | **MATCH — 0** |
+| applied migration ledger | **MATCH — 8 expected task-bot migrations** |
+| anon/authenticated direct table grants | **MATCH — none on the 12 operational tables** |
+| service_role table grants | **KNOWN LIVE DRIFT — broader than repo baseline** |
+| Supabase default privileges | **KNOWN PLATFORM DIFFERENCE / hardening input** |
 
-Only external fact available: the sprint brief states the live
-`users.role` CHECK lacks `SEO`; this agrees with the repo definition below.
+The main catalog structure is therefore compatible with the repo-defined
+task-bot baseline. No table, column, constraint, index, function, trigger,
+RLS, policy, or migration-history drift was found.
 
-What *was* verified (repo side, real evidence): the 8 task-bot migrations
-were applied in order to a fresh local PostgreSQL 17.11 (matching
-`supabase/config.toml` `major_version = 17`) and the read-only audit script
-was run against it. Output: `docs/persistence/repo-catalog-baseline.txt`.
+### Audit visibility notes
 
-Repo-defined catalog summary (the expected side of the parity diff):
+The first comparator run reported `MISSING_IN_LIVE` for triggers, table
+grants and routine grants because `information_schema` filtered catalog
+visibility for the restricted auditor role. These were rechecked directly
+through `pg_catalog`.
 
-| Item | Repo baseline |
-|---|---|
-| Tables | 12 — users, tasks, task_events, deadline_change_requests, reassign_requests, task_revisions, recurring_definitions, task_checklists, task_checklist_items, report_deliveries, user_events, task_reminder_deliveries |
-| RLS | enabled on all 12, not forced, **0 policies** (service_role-only access model) |
-| Constraints | 91 in `public` (PK/FK/UNIQUE/CHECK; CHECK names are Postgres-generated, e.g. `users_role_check`, `tasks_status_check`, `tasks_check`, `task_events_event_type_check`) |
-| FK actions | every FK `ON DELETE RESTRICT` (`confdeltype = r`), `ON UPDATE NO ACTION` |
-| Indexes | 34 (partial: `users_one_active_head_idx`, `users_telegram_username_unique_idx`, `tasks_assignee_open_deadline_idx`, `tasks_status_deadline_idx`, `tasks_recurring_occurrence_unique_idx`, `deadline_change_requests_one_pending_per_task_idx`, `reassign_requests_one_pending_per_task_idx`, `recurring_definitions_due_idx`) |
-| Triggers | 8 (updated_at ×5 tables, task_events immutability, task_revisions immutability, telegram-username claim) |
-| Functions | 13 in `public`, 5 in `private`; **all SECURITY INVOKER**, all `SET search_path = ''` |
-| Table grants | `service_role` only; `task_events`, `task_revisions`, `user_events`: SELECT, INSERT only; `task_checklists`: SELECT, INSERT; no grants to `anon` / `authenticated` |
-| Routine grants | every public RPC: EXECUTE to `service_role` only; `private.attach_posting_checklist` EXECUTE to `service_role`; `private` USAGE to `service_role` |
-| `users.role` CHECK | OPERATOR_VIDEO_EDITOR, CONTENT_MARKETER, DIGITAL_MARKETER, SMM_MANAGER, HEAD_OF_MARKETING — **no SEO** |
+`pg_catalog` confirmed:
 
-How to close this section (read-only, no mutation possible):
+- all 8 expected trigger objects exist;
+- all 12 tables have the expected ACL principals;
+- all 18 expected functions exist;
+- public RPCs are executable by `postgres` / `service_role` and not PUBLIC;
+- `private` schema USAGE is available to `postgres` / `service_role` only,
+  not `anon`, `authenticated`, or PUBLIC.
 
-```
-psql "$READ_ONLY_DB_URL" -v ON_ERROR_STOP=1 -f docs/persistence/live-catalog-audit.sql > live-catalog.txt
-diff docs/persistence/repo-catalog-baseline.txt live-catalog.txt
-```
+The live Supabase migration ledger contains exactly:
 
-The script wraps everything in `BEGIN TRANSACTION READ ONLY … ROLLBACK`.
-Classify each diff hunk MATCH / DIFF / MISSING_IN_LIVE / EXTRA_IN_LIVE. Until
-that run exists every live row stays **UNKNOWN**, and **no draft may be
-applied to production** (see T).
+- `20260906143255 foundation_schema`
+- `20260906150722 harden_revision_history`
+- `20260906151514 fast_track_mvp_core`
+- `20260906162000 secure_head_bootstrap`
+- `20260906163500 telegram_username_integrity`
+- `20260909090000 next_product_phase`
+- `20260909200000 reminders_and_membership`
+- `20260914090000 autostart_tasks`
+
+The task-bot migration files at `1c7bb32` (the source of the repo baseline)
+stayed byte-identical throughout (same md5 before and after every dry-run).
+
+Reference side of the comparison: `docs/persistence/repo-catalog-baseline.txt`
+(built from those 8 migrations on local PostgreSQL 17.11). Comparator:
+`docs/persistence/compare-catalog.py`. The raw live output is not committed.
+
+### Known privilege drift
+
+The live Supabase project has existing PostgreSQL default privileges for
+new `public` tables owned by `postgres`:
+
+- `anon`: TRUNCATE, REFERENCES, TRIGGER, MAINTAIN
+- `authenticated`: TRUNCATE, REFERENCES, TRIGGER, MAINTAIN
+- `service_role`: TRUNCATE, REFERENCES, TRIGGER, MAINTAIN
+
+Existing task-bot migrations explicitly revoke all privileges from
+`public`, `anon`, and `authenticated`, so the current 12 operational tables
+have **no direct anon/authenticated table privileges**.
+
+However, the migrations did not first `REVOKE ALL` from `service_role`.
+Therefore the existing live task-bot tables retain Supabase-default
+`TRUNCATE / REFERENCES / TRIGGER / MAINTAIN` privileges in addition to the
+application grants defined by the repo.
+
+This is a **real least-privilege hardening gap in the existing task-bot
+schema**, not a structural catalog mismatch. It must be handled as a
+separate task-bot hardening change; Content OS must not silently mutate the
+existing task-bot tables.
+
+### Content OS draft fix
+
+The Content OS draft migrations were hardened in local commit `fe2b6e6`.
+
+Every new Content OS table now follows:
+
+1. `REVOKE ALL` from `public`, `anon`, `authenticated`, **and `service_role`**;
+2. grant back only the explicitly required `service_role` privileges.
+
+The local dry-run bootstrap was also updated to emulate the live Supabase
+default table privileges, and the contract suite now verifies that
+`TRUNCATE`, `REFERENCES`, `TRIGGER`, and `MAINTAIN` are stripped from all
+Content OS tables.
+
+Validation after the fix:
+
+- task-bot fingerprint unchanged before/after Content OS drafts;
+- 27 Content OS tables created;
+- **86 PASS / 0 FAIL / 0 ERROR** on the second independent fresh database;
+- Supabase-default privilege stripping test PASS;
+- 12 simultaneous same-key creates → exactly 1 task and 1 idempotency row;
+- rollback removes all Content OS objects and restores the identical
+  task-bot fingerprint;
+- task-bot migration files remain byte-identical and untouched.
+
+**Production state:** no Content OS migration has been applied to Supabase,
+nothing has been pushed or deployed as part of this audit.
+
+**Parity conclusion:** structural parity is verified — `STRUCTURAL_PARITY =
+PASS`. Live parity is no longer an open question and no longer gates
+anything. Production apply is on HOLD for the reasons listed in §T only.
 
 ## C. EXISTING_TABLES_DO_NOT_TOUCH
 
@@ -376,11 +446,18 @@ No Telegram backfill. Service auth stays off.
 
 ## O. RLS_AND_GRANTS_PLAN
 
-Follow the task-bot house pattern exactly (fail-closed):
+Follow the task-bot house pattern (fail-closed), made **stricter** after the
+live audit (§B, commit `fe2b6e6`):
 
 - RLS ENABLED on every new table, **no policies** → `anon` / `authenticated`
   can read/write nothing even if a grant slips in.
-- `REVOKE ALL … FROM public, anon, authenticated` on every table and function.
+- Every new table first `REVOKE ALL … FROM public, anon, authenticated,
+  service_role` — the live project's default privileges for new `public`
+  tables owned by `postgres` grant TRUNCATE / REFERENCES / TRIGGER / MAINTAIN
+  to all three roles, and the task-bot migrations never stripped them from
+  `service_role`. Only then are the privileges below granted back.
+- The new RPC: `REVOKE ALL … FROM public, anon, authenticated`, then EXECUTE
+  to `service_role`.
 - `service_role` (trusted server only, never shipped to a browser):
   - content entities, `content_task_runtime`, task types / workflow template
     identity rows, `content_material_result_reviews`: SELECT, INSERT, UPDATE
@@ -473,47 +550,109 @@ content-schema drafts. Not drafted or applied yet.
 
 ## S. OPEN_PRODUCT_DECISIONS
 
-1. **[DECIDED — see S0/D1; task-bot change pending] Status-machine parity.** Production
-   (`transition_task_with_events` + `src/domain/workflow.ts`) only allows
-   DONE via APPROVE from REVIEW, by Head or creator; DONE can only REOPEN to
-   ASSIGNED; BLOCKED needs a reason. The local V1 runtime
-   (a) completes ASSIGNED/IN_PROGRESS → DONE directly, and (b) since Sprint
-   7.1 moves a **DONE** Blog to REVISION and parks Head Review BLOCKED.
-   Options: map Complete = SUBMIT_REVIEW + APPROVE (every content task gets a
-   creator/Head approval), or extend the task-bot transition model (task-bot
-   behavior change, owner Codex). Head Review → Blog revision then maps to
-   either production REVIEW→REVISION on the Blog itself (which re-introduces
-   the review that Sprint 7.1 removed from the Blog) or REOPEN (DONE→ASSIGNED).
-2. **Required operational fields.** `tasks.assignee_id` and `tasks.deadline`
-   are NOT NULL; local tasks can exist without them (preview defaults,
-   reconciler-created Publish Check / Learning). Content OS must resolve a
-   real assignee and deadline before creating a task.
-3. **[DECIDED — see S0/D2: `SEO_SPECIALIST`; separate task-bot migration pending] SEO role** — `users.role` CHECK has no SEO (repo; live per brief). Fixture
-   "SEO" assignee rule cannot resolve. Separate task-bot migration; code TBD.
-   `SMM_MANAGER` stays for compatibility.
-4. **Role mapping** of Task Type FIXED_ROLE strings ("Operator / Montajer",
-   "Digital marketer", "Head", "SEO") to `users.role` codes.
-5. **Handler binding.** Local runtime handlers are keyed by Task Type *name*;
-   a rename detaches special behavior. Persisted identity carries a stable
-   `code`; the code registry should move to it (later code change).
-6. **Legacy hierarchy**: what a ProblemPart is in legacy data (CL-* clusters?)
-   and how many-CP nodes pick one parent.
-7. **Angle score scale** (local code has no upper bound).
-8. **Identity provider string**: the auth header `x-content-os-actor-provider`
-   example is `content-os`; the mapping provider is `OPENAI_SIWC`. Pick one
-   meaning for the resolver input.
-9. `tenant_key` source for SIWC subjects.
+Status at Sprint 8 close. "Gates schema apply" means the Content OS draft
+migrations must not be applied to Supabase until the item is done; anything
+else gates a later step (wiring, legacy import, service auth) and is planned
+in `SPRINT_9_TASK_BOT_INTEGRATION_PLAN.md`.
 
-## T. SAFE_TO_DRAFT_MIGRATIONS = **YES**
+| # | Item | State | Gates schema apply? |
+|---|---|---|---|
+| 1 | Task status transitions | **DECIDED** (S0/D1). Task-bot change **not implemented** | **YES** — via Track A compatibility review |
+| 2 | `tasks.assignee_id` / `tasks.deadline` are NOT NULL | Fixed task-bot rule; Content OS must resolve both before creating a task | No — bridge wiring requirement (Track B) |
+| 3 | SEO role | **DECIDED** (S0/D2: `SEO_SPECIALIST`). Task-bot migration **not drafted** | **YES** — via Track A compatibility review |
+| 4 | FIXED_ROLE strings → `users.role` codes | Proposed in the Sprint 9 plan (needs confirmation) | No — wiring |
+| 5 | Runtime handlers keyed by display name | Schema already carries stable `code`; code change pending | No — wiring |
+| 6 | Legacy hierarchy (what a ProblemPart is in legacy data; one parent for many-CP nodes) | **OPEN** | No for V1-created data; **gates the Sheet import**. Decide before apply if the answer could make `content_knowledge_nodes.problem_part_id` nullable (that would be a schema change) |
+| 7 | Angle score scale | OPEN (schema enforces `>= 0` only) | No — an upper bound can be added later |
+| 8 | Resolver provider string (`content-os` header vs `OPENAI_SIWC`) | OPEN | No for content schema; **gates enabling `external_identity_links` / service auth** |
+| 9 | `tenant_key` source for SIWC subjects | OPEN | Same as 8 |
 
-Sprint 8B result (separate commit): drafts in `supabase/content-os-drafts/`,
-dry-run on a disposable local PostgreSQL 17.11 — see
-`supabase/content-os-drafts/dry-run/DRY_RUN_EVIDENCE.log`.
+Background on 1 (kept for the task-bot reviewer): production
+(`transition_task_with_events` + `src/domain/workflow.ts`) only reaches DONE
+via REVIEW → APPROVE by Head or creator, and DONE can only REOPEN to
+ASSIGNED; BLOCKED needs a reason. D1 requires narrow additions:
+IN_PROGRESS → DONE for non-review Content OS tasks, DONE → REVISION for an
+authorized reviewer's revision request on the source Blog, and
+REVISION → DONE for the corrected Blog — no new statuses.
 
-Drafting and dry-running locally is safe: drafts are additive, live outside
-the task-bot repo, and are exercised only on a disposable local PostgreSQL 17
-built from the task-bot repo migrations.
+## T. SAFE_TO_DRAFT_MIGRATIONS = **YES** — gates at Sprint 8 close
 
-**Not safe to APPLY to production** until (1) the live catalog audit (B) is
-run and shows no blocking DIFF, (2) decisions S1–S3 are made, and (3) the
-task-bot owner reviews the drafts.
+| Gate | Value | Basis |
+|---|---|---|
+| `SAFE_TO_DRAFT_MIGRATIONS` | **YES** | Drafts are additive, live outside the task-bot repo, and only ever ran on disposable local PostgreSQL 17.11 |
+| `STRUCTURAL_PARITY` | **PASS** | Live read-only audit (§B): tables, columns, constraints, indexes, functions, triggers, RLS, policies and migration ledger all MATCH the task-bot repo baseline |
+| `CONTENT_OS_DRAFT_SAFETY` | **PASS** | `fe2b6e6` strips Supabase-default privileges from every Content OS table; dry-run (§U) passes all contract checks, leaves the task-bot fingerprint identical, and rolls back cleanly |
+| `PRODUCTION_APPLY` | **HOLD** | The gates below — **not** live parity, which is verified |
+
+What still gates applying the Content OS drafts to production:
+
+1. **Task-bot compatibility changes approved but not implemented (Track A):**
+   - the narrow state-machine extension of S0/D1 (IN_PROGRESS → DONE,
+     DONE → REVISION, REVISION → DONE; no new statuses);
+   - the separate `SEO_SPECIALIST` role migration (S0/D2), keeping
+     `SMM_MANAGER`.
+   The Content OS schema does not depend on them structurally, but the
+   bridge is only usable once they exist and have been reviewed, so the
+   schema is applied after that review, not before.
+2. **Task-bot owner review of the existing `service_role` privilege gap**
+   (§B "Known privilege drift"): the 12 live task-bot tables still carry
+   Supabase-default TRUNCATE / REFERENCES / TRIGGER / MAINTAIN for
+   `service_role`. That is a separate, reviewed task-bot hardening change;
+   Content OS migrations must not touch those tables. The owner decides
+   whether it lands before or alongside the Content OS apply.
+3. **Open decision that can still change the schema:** S6 (legacy
+   hierarchy). Only relevant if its answer makes a knowledge node's parent
+   part optional; otherwise it gates the Sheet import, not the apply.
+4. **Final migration owner approval** of the drafts in
+   `supabase/content-os-drafts/` (task-bot track owns the production schema;
+   `external_identity_links` may move to that repo and stays disabled until
+   S8/S9 are decided).
+
+Not gates any more: live catalog parity (PASS), the Content OS privilege
+defaults (fixed in `fe2b6e6`).
+
+## U. SPRINT_8_CLOSEOUT
+
+**Live audit (2026-10-14, read-only).** Dedicated `content_os_auditor` role,
+`default_transaction_read_only = on`. Task-bot live catalog matches the repo
+baseline: 12 tables, 118 columns, 91 constraints, 34 indexes, 18 functions,
+8 trigger objects, RLS on all 12 (not forced), 0 policies, exactly the 8
+expected migrations in the ledger, no direct anon/authenticated privilege on
+the 12 operational tables. Early `MISSING_IN_LIVE` results for triggers and
+grants were `information_schema` visibility limits of the restricted role,
+resolved by direct `pg_catalog` inspection — not drift.
+
+**Hardening fix `fe2b6e6`.** The audit found Supabase default privileges for
+new `public` tables (TRUNCATE / REFERENCES / TRIGGER / MAINTAIN to anon,
+authenticated, service_role). Every Content OS draft table now revokes ALL
+from `public, anon, authenticated, service_role` first and grants back only
+the intended `service_role` privileges. The dry-run bootstrap emulates those
+live defaults, and a contract check proves none of the four privileges
+survives on any Content OS table.
+
+**Latest dry-run evidence** (`supabase/content-os-drafts/dry-run/DRY_RUN_EVIDENCE.log`,
+re-run at Sprint 8 close with identical results): PostgreSQL 17.11; task-bot
+repo `1c7bb32`, clean; task-bot fingerprint identical before/after drafts
+(438 objects, md5 `2d9aa711…`); 27 Content OS tables; all contract tests PASS;
+second independent database 86 PASS / 0 FAIL / 0 ERROR; 12 concurrent
+same-key creates → exactly 1 task + 1 idempotency row; rollback removes every
+Content OS object and restores the identical fingerprint; task-bot migration
+files byte-identical.
+
+**Known task-bot privilege gap.** The existing task-bot migrations revoke
+from `public, anon, authenticated` but never from `service_role`, so the 12
+live operational tables keep Supabase-default TRUNCATE / REFERENCES /
+TRIGGER / MAINTAIN for `service_role` (reproduced locally by the emulated
+bootstrap). Least-privilege gap, not a structural mismatch; owned by the
+task-bot track as its own reviewed change (Sprint 9 Track A4). Content OS
+does not fix it.
+
+**Safe now:** reading this contract; running the read-only audit and
+comparator; running the local dry-run; reviewing the drafts; drafting the
+Track A task-bot changes for review.
+
+**Intentionally unapplied:** all Content OS draft migrations (no Supabase
+apply), `external_identity_links` (drafted, disabled), the D1 state-machine
+extension and the D2 `SEO_SPECIALIST` migration (approved, not implemented),
+the task-bot `service_role` hardening, any application wiring of persistence.
+Nothing pushed, nothing deployed.

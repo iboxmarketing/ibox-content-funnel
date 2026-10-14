@@ -6,11 +6,17 @@
 --
 --   psql "$READ_ONLY_DB_URL" -v ON_ERROR_STOP=1 -f live-catalog-audit.sql > live-catalog.txt
 --
--- Then diff live-catalog.txt against the same script run on a database built
--- only from marketing-team-task-bot/supabase/migrations (see
--- supabase/content-os-drafts/dry-run/run-dry-run.sh, which produces
--- repo-catalog.txt with this exact script). Every line difference is a
--- DIFF / MISSING_IN_LIVE / EXTRA_IN_LIVE finding.
+-- Then classify live-catalog.txt against docs/persistence/repo-catalog-baseline.txt
+-- (this exact script run on a local database built only from the 8 task-bot
+-- migrations, via supabase/content-os-drafts/dry-run/load-taskbot-baseline.sh):
+--
+--   python3 docs/persistence/compare-catalog.py docs/persistence/repo-catalog-baseline.txt live-catalog.txt
+--
+-- Visibility caveat (found in the 2026-10-14 live audit): information_schema
+-- only shows objects the connected role has privileges on, so a restricted
+-- auditor role can see MISSING_IN_LIVE triggers/grants that do exist.
+-- Re-check any such row directly in pg_catalog (pg_trigger, pg_class.relacl,
+-- pg_proc.proacl, pg_namespace.nspacl) before calling it drift.
 
 begin transaction read only;
 

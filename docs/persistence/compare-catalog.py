@@ -14,6 +14,10 @@ Every row is keyed by its identity columns (e.g. table + constraint name):
 Nothing is normalized beyond trimming psql's cell padding: whitespace inside
 a value, casing, ordering of array elements etc. all count as differences.
 
+Sections fed by information_schema (triggers, table/routine grants) are
+filtered by the connected role's privileges. With a restricted auditor role,
+confirm every MISSING_IN_LIVE row there in pg_catalog before calling it drift.
+
 Usage: compare-catalog.py repo-catalog-baseline.txt live-catalog.txt
 """
 import sys

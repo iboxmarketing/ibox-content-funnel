@@ -16,7 +16,12 @@ files exist only to be dry-run on a disposable local PostgreSQL 17.
 
 Why they are not under `supabase/migrations/`: this repo has no Supabase
 project of its own, and the task-bot track (Codex) owns the production
-schema. Before any production apply: run `docs/persistence/live-catalog-audit.sql`
-read-only against the live project, resolve the open decisions in
-`docs/persistence/SPRINT_8A_PERSISTENCE_CONTRACT.md` §S, and get task-bot
-owner review. `external_identity_links` may move to the task-bot repo.
+schema. `external_identity_links` may move to the task-bot repo.
+
+Status at Sprint 8 close (`docs/persistence/SPRINT_8A_PERSISTENCE_CONTRACT.md`
+§T, §U): live structural parity **PASS** (read-only audit, 2026-10-14);
+draft safety **PASS** (incl. the `fe2b6e6` privilege hardening); production
+apply **HOLD** until the Track A task-bot compatibility changes are
+implemented and reviewed, the task-bot owner has reviewed the existing
+`service_role` privilege gap, and the migration owner approves these drafts.
+Plan: `docs/persistence/SPRINT_9_TASK_BOT_INTEGRATION_PLAN.md`.
