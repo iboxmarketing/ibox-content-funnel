@@ -287,7 +287,7 @@ test("server/client boundary: only the route touches env; no client code can rea
   const clientFiles = readdirSync(new URL("../components/", import.meta.url), { recursive: true }).filter((f) => /\.(tsx?|jsx?)$/.test(f));
   for (const file of clientFiles) {
     const source = readFileSync(new URL(`../components/${file}`, import.meta.url), "utf8");
-    assert.doesNotMatch(source, /lib\/persistence|api\/content-os|SERVICE_ROLE/, file);
+    assert.doesNotMatch(source, /lib\/persistence|SERVICE_ROLE|service_role/, file); // calling the session-authenticated HTTP route is fine
   }
   const anyPublicSecret = readdirSync(new URL("../", import.meta.url), { recursive: true })
     .filter((f) => /\.(tsx?|mjs)$/.test(f) && !f.includes("node_modules") && !f.startsWith("dist") && !f.startsWith(".next"))
@@ -346,4 +346,47 @@ test("9D: one structured log record per request, classified, without subject or 
   assert.deepEqual(records.slice(2, 4).map((r) => r.created), [true, false], "idempotent replay is visible");
   assert.equal(records[6].sqlState, "42501");
   assert.doesNotMatch(JSON.stringify(records), /Secret title/);
+});
+
+// --- Sprint 10D: Head Review independence + Blog completion invariant -------------------------------
+
+test("10D: the Blog author cannot name themselves reviewer — refused BEFORE the Blog moves (no DONE Blog without a review)", async () => {
+  const w = world();
+  const { blogTaskId } = await start(w);
+  await assert.rejects(() => complete(w, blogTaskId, AUTHOR), /author cannot review their own Blog/);
+  assert.equal((await w.tasks.getTask(blogTaskId)).status, "IN_PROGRESS", "pre-10D this produced a DONE Blog reviewed by its own author");
+  assert.equal(w.tasks.tasks.size, 1, "no Head Review was created");
+  w.tasks.addActor({ id: "00000000-0000-4000-8000-0000000000a9", role: "SMM_MANAGER", isActive: false });
+  await assert.rejects(() => complete(w, blogTaskId, "00000000-0000-4000-8000-0000000000a9"), /active team member/);
+  assert.equal((await w.tasks.getTask(blogTaskId)).status, "IN_PROGRESS");
+  const done = await complete(w, blogTaskId);
+  assert.deepEqual([done.blogStatus, done.headReviewStatus, done.headReviewCreated], ["DONE", "IN_PROGRESS", true]);
+  assert.equal((await complete(w, blogTaskId)).headReviewTaskId, done.headReviewTaskId, "retry: same Blog, same Head Review");
+});
+
+test("10D: the Head Review's creator is the Blog's commissioner, never its author", async () => {
+  const w = world();
+  const { blogTaskId } = await start(w);
+  const { headReviewTaskId } = await complete(w, blogTaskId);
+  assert.equal(w.tasks.tasks.get(headReviewTaskId).creatorId, HEAD);
+  assert.notEqual(w.tasks.tasks.get(headReviewTaskId).creatorId, AUTHOR);
+});
+
+test("10D: when Head writes the Blog, Head cannot decide its review (independence beats role)", async () => {
+  const w = world();
+  const { blogTaskId } = await w.flow.startBlog({ requestKey: "head-blog", knowledgeNodeId: NODE, blogTitle: "Head's blog", creatorId: HEAD, assigneeId: HEAD, deadline: DEADLINE });
+  const { headReviewTaskId: reviewTaskId } = await w.flow.completeBlog({ blogTaskId, actorId: HEAD, reviewerId: REVIEWER, reviewDeadline: DEADLINE });
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "x" }), /author cannot decide its Head Review/);
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: HEAD }), /author cannot decide its Head Review/);
+  assert.equal((await w.flow.approve({ reviewTaskId, actorId: REVIEWER })).headReviewStatus, "DONE", "the independent reviewer still approves");
+});
+
+test("10D: Task Bot PT409 business conflicts map to HTTP 409, never 500", async () => {
+  const w = apiWorld();
+  const { blogTaskId } = await start(w);
+  for (const shape of [{ pgCode: "PT409" }, { sqlState: "PT409" }]) {
+    const flow = { completeBlog: async () => { throw Object.assign(new Error("archived task must be restored before mutation"), shape); } };
+    const res = await handleBlogReviewRequest({ body: { action: "complete", blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, actorId: AUTHOR }, { flow });
+    assert.deepEqual([res.status, res.body.code], [409, "CONFLICT"]);
+  }
 });

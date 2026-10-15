@@ -26,6 +26,12 @@
  * the request without limit, so a request the Task Bot would refuse must be
  * refused here (ContentOsRuleError) and never sent.
  *
+ * Head Review independence (Sprint 10D): the reviewed Blog's author is never
+ * the Head Review's reviewer, never its creator, and never decides it — not
+ * even as Head. The review's creator is the person who commissioned the Blog
+ * (the Blog task's creator), so generic creator rights can never hand the
+ * author control of their own review.
+ *
  * Only stable ids, codes and lineage are used — never titles or names.
  * Status changes go only through OperationalTaskGateway (Task Bot RPCs);
  * ContentOsStore writes only content_* rows.
@@ -140,6 +146,9 @@ export class BlogReviewFlow {
     if (blog.requiresReview) throw new ContentOsRuleError("this Blog task is review-required; it completes through REVIEW, not directly");
     if (blog.task.status === "IN_PROGRESS" || blog.task.status === "REVISION") {
       if (blog.task.assigneeId !== input.actorId) throw new ContentOsRuleError("only the Blog assignee completes the Blog");
+      // Invariant "Blog DONE => exactly one Head Review": validate the reviewer BEFORE the Blog
+      // moves, so a refused review creation can never leave a DONE Blog without its review.
+      if (!(await this.findHeadReview(blog.task.id))) await this.assertReviewer(blog, input.reviewerId);
       if (blog.task.status === "REVISION") {
         // The Task Bot restores the parked review only if it is still BLOCKED.
         const parked = await this.findHeadReview(blog.task.id);
@@ -171,6 +180,7 @@ export class BlogReviewFlow {
     const blogTaskId = this.sourceOf(review);
     let blog = await this.requireFacts(blogTaskId, BLOG_TASK_TYPE_CODE);
     const actor = await this.tasks.getActor(input.actorId);
+    if (input.actorId === blog.task.assigneeId) throw new ContentOsRuleError("the Blog's author cannot decide its Head Review");
     if (!isReviewAuthority(review, actor)) throw new ContentOsRuleError("this actor may not decide this Head Review");
 
     const alreadyApplied = blog.task.status === "REVISION" && review.task.status === "BLOCKED";
@@ -196,6 +206,8 @@ export class BlogReviewFlow {
     let review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
     const blogTaskId = this.sourceOf(review);
     if (review.task.status !== "DONE") {
+      const source = await this.tasks.getTask(blogTaskId);
+      if (source?.assigneeId === input.actorId) throw new ContentOsRuleError("the Blog's author cannot decide its Head Review");
       const actor = await this.tasks.getActor(input.actorId);
       if (!isReviewAuthority(review, actor) || review.task.assigneeId !== input.actorId) {
         throw new ContentOsRuleError("only the Head Review assignee completes the review");
@@ -279,6 +291,7 @@ export class BlogReviewFlow {
     const existing = await this.findHeadReview(blog.task.id);
     if (existing) return { headReviewTaskId: existing, headReviewCreated: false };
 
+    await this.assertReviewer(blog, input.reviewerId);
     const version = await this.store.currentTaskTypeVersion(HEAD_REVIEW_TASK_TYPE_CODE);
     if (!version) throw new ContentOsRuleError("no current HEAD_REVIEW Task Type version");
     const blogRecord = await this.store.getBlog(blogLink.entityId);
@@ -290,7 +303,8 @@ export class BlogReviewFlow {
       purpose: "CREATE_TASK",
       idempotencyKey: idempotencyKeys.headReviewTask(blog.task.id),
       requestHash: requestHash({ kind: HEAD_REVIEW_TASK_TYPE_CODE, blogTaskId: blog.task.id, blogId: blogLink.entityId }),
-      creatorId: input.actorId,
+      // The Blog's commissioner, never the author (who completes the Blog).
+      creatorId: blog.task.creatorId,
       assigneeId: input.reviewerId,
       title,
       description: "",
@@ -306,6 +320,12 @@ export class BlogReviewFlow {
     if (relatedNode) links.push({ taskId, entityType: "KNOWLEDGE_NODE", entityId: relatedNode.entityId, relation: "RELATED" });
     await this.store.ensureLinks(links);
     return { headReviewTaskId: taskId, headReviewCreated: created };
+  }
+
+  private async assertReviewer(blog: ContentOsTaskFacts, reviewerId: string): Promise<void> {
+    if (reviewerId === blog.task.assigneeId) throw new ContentOsRuleError("the Blog's author cannot review their own Blog");
+    const reviewer = await this.tasks.getActor(reviewerId);
+    if (!reviewer?.isActive) throw new ContentOsRuleError("the reviewer must be an active team member");
   }
 
   private sourceOf(review: ContentOsTaskFacts): string {

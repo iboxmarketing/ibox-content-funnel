@@ -137,7 +137,7 @@ test("4. the wrong reviewer cannot request the revision (unrelated member, the B
   const w = world();
   const { reviewTaskId, blogTaskId } = await blogThroughHeadReview(w);
   for (const actorId of [OTHER, AUTHOR]) {
-    await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId, note: "x" }), /may not decide this Head Review/);
+    await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId, note: "x" }), /may not decide this Head Review|author cannot decide its Head Review/);
     await assert.rejects(() => w.tasks.transition(blogTaskId, actorId, "REVISION", "x"), /only the source Blog's Head Review/);
   }
   w.tasks.actors.set(REVIEWER, { id: REVIEWER, role: "DIGITAL_MARKETER", isActive: false });

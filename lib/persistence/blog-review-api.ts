@@ -120,7 +120,8 @@ export async function handleBlogReviewRequest(
     }
     const sqlState = (error as { sqlState?: string; pgCode?: string | null }).sqlState ?? (error as { pgCode?: string | null }).pgCode ?? null;
     if (sqlState === "42501") return done("task_bot_rejected", { status: 403, body: { code: "FORBIDDEN", error: "The task backend refused this action for your account." } }, { actorId, sqlState });
-    if (sqlState === "40001" || sqlState === "23505" || sqlState === "23514" || sqlState === "22023" || sqlState === "55000") {
+    // PT409 is the Task Bot's business-conflict SQLSTATE (PostgREST answers it as HTTP 409).
+    if (sqlState === "PT409" || sqlState === "40001" || sqlState === "23505" || sqlState === "23514" || sqlState === "22023" || sqlState === "55000") {
       return done("task_bot_rejected", { status: 409, body: { code: "CONFLICT", error: "The task changed or the action is not allowed in its current state; reload and retry." } }, { actorId, sqlState });
     }
     return done("internal_error", { status: 500, body: { code: "INTERNAL_ERROR", error: "Content OS persistence request failed." } }, { actorId, sqlState, errorName: error instanceof Error ? error.name : typeof error });

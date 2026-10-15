@@ -16,17 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  canArchiveTask,
-  canDirectChangeDeadline,
-  canDirectReassign,
-  canEditTask,
-  canRequestTaskChange,
-  isHead,
-  isTaskAssignee,
-  isTaskCreator,
-} from "@/lib/team-task-permissions";
 import type { AuthenticatedUser } from "@/lib/auth/repository";
+import type { LifecycleAction, TaskCapabilities, WorkflowAction } from "@/lib/team-task-policy";
 import type {
   TaskBackendChangeRequests,
   TaskBackendDetails,
@@ -37,6 +28,8 @@ import type {
 } from "@/lib/task-client-types";
 
 type CurrentUser = Pick<AuthenticatedUser, "id" | "displayName" | "role">;
+/** Every control below is driven by these server-computed capabilities, never by local role checks. */
+type TaskWithCapabilities = TaskBackendTask & { readonly capabilities?: TaskCapabilities };
 type TaskView = "my" | "all" | "requests" | "archived";
 
 const EMPTY_REQUESTS: TaskBackendChangeRequests = { deadlineRequests: [], reassignRequests: [] };
@@ -84,22 +77,51 @@ function localDateTimeInput(value: Date): string {
   return local.toISOString().slice(0, 16);
 }
 
-function lifecycleActions(user: CurrentUser, task: TaskBackendTask, archived: boolean) {
-  const actions: Array<{ action: "ACCEPT" | "BLOCK" | "RESUME" | "SUBMIT_REVIEW" | "APPROVE" | "REQUEST_REVISION" | "CANCEL" | "REOPEN"; label: string }> = [];
-  if (archived) return actions;
-  if (isTaskAssignee(user, task)) {
-    if (task.status === "ASSIGNED") actions.push({ action: "ACCEPT", label: "Accept" });
-    if (task.status === "IN_PROGRESS") actions.push({ action: "BLOCK", label: "Block" }, { action: "SUBMIT_REVIEW", label: "Submit review" });
-    if (task.status === "BLOCKED" || task.status === "REVISION") actions.push({ action: "RESUME", label: "Resume" });
-  }
-  if ((isHead(user) || isTaskCreator(user, task)) && task.status === "REVIEW") {
-    actions.push({ action: "APPROVE", label: "Approve" }, { action: "REQUEST_REVISION", label: "Request revision" });
-  }
-  if ((isHead(user) || isTaskCreator(user, task)) && !["DONE", "CANCELLED"].includes(task.status)) {
-    actions.push({ action: "CANCEL", label: "Cancel" });
-  }
-  if (isHead(user) && task.status === "CANCELLED") actions.push({ action: "REOPEN", label: "Reopen" });
-  return actions;
+const LIFECYCLE_LABEL: Record<LifecycleAction, string> = {
+  ACCEPT: "Accept", BLOCK: "Block", RESUME: "Resume", SUBMIT_REVIEW: "Submit review",
+  APPROVE: "Approve", REQUEST_REVISION: "Request revision", CANCEL: "Cancel", REOPEN: "Reopen",
+};
+
+class ApiConflictError extends Error {}
+
+async function workflowApi(body: Record<string, unknown>): Promise<void> {
+  const response = await fetch("/api/content-os/blog-review", { method: "POST", cache: "no-store", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const result = await response.json().catch(() => ({})) as { code?: string; error?: string };
+  if (response.status === 409) throw new ApiConflictError(result.error || "The task changed; the view has been refreshed.");
+  if (!response.ok) throw new Error(result.error || result.code || `Request failed (${response.status})`);
+}
+
+function WorkflowPanel({ task, capabilities, users, busy, onWorkflow }: {
+  task: TaskBackendTask;
+  capabilities: TaskCapabilities;
+  users: readonly TaskBackendUser[];
+  busy: boolean;
+  onWorkflow: (body: Record<string, unknown>) => Promise<void>;
+}) {
+  const classification = capabilities.classification;
+  const reviewers = users.filter((user) => user.isActive && user.id !== task.assigneeId && !capabilities.forbiddenAssigneeIds.includes(user.id));
+  const [reviewerId, setReviewerId] = useState(reviewers[0]?.id ?? "");
+  const [reviewDeadline, setReviewDeadline] = useState(nextDayLocalInput);
+  const [note, setNote] = useState("");
+  if (classification.kind !== "CONTENT_OS") return null;
+  const has = (action: WorkflowAction) => capabilities.workflowActions.includes(action);
+  const firstCompletion = classification.code === "BLOG" && !classification.reviewerId;
+  return <div className="rounded-2xl border border-violet-200 bg-violet-50/40 p-4">
+    <h3 className="text-sm font-bold text-slate-900">Content OS workflow · {classification.code}</h3>
+    <p className="mt-1 text-xs text-slate-600">This task moves only through the Blog review workflow. Generic creator and lifecycle controls do not apply.</p>
+    {has("COMPLETE_BLOG") ? <div className="mt-3 space-y-2">
+      {firstCompletion ? <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Head Review reviewer<select value={reviewerId} onChange={(event) => setReviewerId(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm">{reviewers.map((user) => <option key={user.id} value={user.id}>{user.displayName}</option>)}</select></label><label className="text-xs font-semibold text-slate-600">Review deadline<Input type="datetime-local" value={reviewDeadline} onChange={(event) => setReviewDeadline(event.target.value)} className="mt-1 bg-white" /></label></div> : null}
+      <Button size="sm" disabled={busy || (firstCompletion && !reviewerId)} onClick={() => void onWorkflow({ action: "complete", blogTaskId: task.id, reviewerId: firstCompletion ? reviewerId : (classification.reviewerId ?? reviewerId), reviewDeadline: new Date(reviewDeadline).toISOString() })}><Check className="size-4" /> {task.status === "REVISION" ? "Resubmit Blog for review" : "Complete Blog & open Head Review"}</Button>
+    </div> : null}
+    {has("REVIEW_REQUEST_REVISION") || has("REVIEW_APPROVE") ? <div className="mt-3 space-y-2">
+      {has("REVIEW_REQUEST_REVISION") ? <Textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="What must the author change?" className="bg-white" /> : null}
+      <div className="flex flex-wrap gap-2">
+        {has("REVIEW_APPROVE") ? <Button size="sm" disabled={busy} onClick={() => void onWorkflow({ action: "approve", reviewTaskId: task.id })}><Check className="size-4" /> Approve Blog</Button> : null}
+        {has("REVIEW_REQUEST_REVISION") ? <Button size="sm" variant="outline" disabled={busy || !note.trim()} onClick={() => void onWorkflow({ action: "request-revision", reviewTaskId: task.id, note: note.trim() })}>Request revision</Button> : null}
+      </div>
+    </div> : null}
+    {!capabilities.workflowActions.length ? <p className="mt-2 text-xs text-slate-500">No workflow action is available to you on this task right now.</p> : null}
+  </div>;
 }
 
 function CreateTaskPanel({ users, currentUser, onCreated }: {
@@ -173,18 +195,20 @@ function RequestsPanel({ requests, tasks, users, busy, onResolve }: {
   </div>)}</div>;
 }
 
-function TaskDetailPanel({ details, users, currentUser, busy, onMutation }: {
+function TaskDetailPanel({ details, capabilities, users, busy, onMutation, onWorkflow }: {
   details: TaskBackendDetails;
+  capabilities: TaskCapabilities;
   users: readonly TaskBackendUser[];
-  currentUser: CurrentUser;
   busy: boolean;
   onMutation: (body: Record<string, unknown>) => Promise<void>;
+  onWorkflow: (body: Record<string, unknown>) => Promise<void>;
 }) {
   const task = details.task;
   const archived = details.archive !== null;
-  const activeUsers = users.filter((user) => user.isActive);
-  const direct = !archived && canEditTask(currentUser, task);
-  const request = !archived && canRequestTaskChange(currentUser, task);
+  const workflowTask = capabilities.classification.kind === "CONTENT_OS";
+  const activeUsers = users.filter((user) => user.isActive && !capabilities.forbiddenAssigneeIds.includes(user.id));
+  const direct = capabilities.canEdit;
+  const request = capabilities.canRequestChange;
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
   const [priority, setPriority] = useState(task.priority);
@@ -192,14 +216,16 @@ function TaskDetailPanel({ details, users, currentUser, busy, onMutation }: {
   const [deadline, setDeadline] = useState(() => localDateTimeInput(new Date(task.deadline)));
   const [reason, setReason] = useState("");
 
-  const actions = lifecycleActions(currentUser, task, archived);
+  const actions = capabilities.lifecycleActions.map((action) => ({ action, label: LIFECYCLE_LABEL[action] }));
   const requester = archived
     ? "Archived — workflow and task fields are read only until Head restores this task."
-    : request
+    : workflowTask && !direct && !request
+      ? "Content OS workflow task — use the workflow actions below; generic creator controls do not apply."
+      : request
       ? "Changes require Head approval."
       : direct
         ? "You can change this task directly."
-        : "Read only — you are neither creator, assignee, nor Head.";
+        : "Read only for you.";
   return <div className="space-y-4">
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start gap-2"><div className="min-w-0 flex-1"><h2 className="text-lg font-bold text-slate-950">{task.title}</h2><p className="mt-1 text-xs text-slate-500">Creator: {userName(users, task.creatorId)} · Assignee: {userName(users, task.assigneeId)}</p></div><Badge variant="outline" className={STATUS_TONE[task.status]}>{task.status}</Badge></div>
@@ -208,15 +234,17 @@ function TaskDetailPanel({ details, users, currentUser, busy, onMutation }: {
       <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{requester}</p>
     </div>
 
+    <WorkflowPanel task={task} capabilities={capabilities} users={users} busy={busy || archived} onWorkflow={onWorkflow} />
+
     {actions.length ? <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-sm font-bold text-slate-900">Workflow</h3><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reason for block, revision, or cancellation" className="mt-2" /><div className="mt-3 flex flex-wrap gap-2">{actions.map((entry) => <Button key={entry.action} size="sm" variant={entry.action === "CANCEL" || entry.action === "REQUEST_REVISION" ? "outline" : "default"} disabled={busy || (["BLOCK", "REQUEST_REVISION", "CANCEL"].includes(entry.action) && !reason.trim())} onClick={() => void onMutation({ action: "lifecycle", taskId: task.id, taskAction: entry.action, ...(reason.trim() ? { reason: reason.trim() } : {}) })}>{entry.label}</Button>)}</div></div> : null}
 
-    {direct ? <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-sm font-bold text-slate-900">Creator / Head controls</h3><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Title<Input value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1" /></label><label className="text-xs font-semibold text-slate-600">Priority<select value={priority} onChange={(event) => setPriority(event.target.value as TaskBackendPriority)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm"><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label></div><label className="mt-3 block text-xs font-semibold text-slate-600">Context<Textarea value={description} onChange={(event) => setDescription(event.target.value)} className="mt-1" /></label><Button size="sm" className="mt-3" disabled={busy || !title.trim()} onClick={() => void onMutation({ action: "edit", taskId: task.id, title, description: description || null, priority })}>Save content</Button>
-      {canDirectReassign(currentUser, task) || canDirectChangeDeadline(currentUser, task) ? <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">{canDirectReassign(currentUser, task) ? <label className="text-xs font-semibold text-slate-600">Direct assignee<select value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm">{activeUsers.map((user) => <option key={user.id} value={user.id}>{user.displayName}</option>)}</select><Button size="sm" variant="outline" className="mt-2" disabled={busy || assigneeId === task.assigneeId} onClick={() => void onMutation({ action: "direct-reassign", taskId: task.id, assigneeId })}>Reassign directly</Button></label> : null}{canDirectChangeDeadline(currentUser, task) ? <label className="text-xs font-semibold text-slate-600">Direct deadline<Input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="mt-1" /><Button size="sm" variant="outline" className="mt-2" disabled={busy} onClick={() => void onMutation({ action: "direct-deadline", taskId: task.id, deadline: new Date(deadline).toISOString() })}>Change directly</Button></label> : null}</div> : null}
+    {direct ? <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-sm font-bold text-slate-900">{workflowTask ? "Head controls" : "Creator / Head controls"}</h3><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Title<Input value={title} onChange={(event) => setTitle(event.target.value)} className="mt-1" /></label><label className="text-xs font-semibold text-slate-600">Priority<select value={priority} onChange={(event) => setPriority(event.target.value as TaskBackendPriority)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm"><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select></label></div><label className="mt-3 block text-xs font-semibold text-slate-600">Context<Textarea value={description} onChange={(event) => setDescription(event.target.value)} className="mt-1" /></label><Button size="sm" className="mt-3" disabled={busy || !title.trim()} onClick={() => void onMutation({ action: "edit", taskId: task.id, title, description: description || null, priority })}>Save content</Button>
+      {capabilities.canDirectReassign || capabilities.canDirectDeadline ? <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-2">{capabilities.canDirectReassign ? <label className="text-xs font-semibold text-slate-600">Direct assignee<select value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 px-3 text-sm">{activeUsers.map((user) => <option key={user.id} value={user.id}>{user.displayName}</option>)}</select><Button size="sm" variant="outline" className="mt-2" disabled={busy || assigneeId === task.assigneeId} onClick={() => void onMutation({ action: "direct-reassign", taskId: task.id, assigneeId })}>Reassign directly</Button></label> : null}{capabilities.canDirectDeadline ? <label className="text-xs font-semibold text-slate-600">Direct deadline<Input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="mt-1" /><Button size="sm" variant="outline" className="mt-2" disabled={busy} onClick={() => void onMutation({ action: "direct-deadline", taskId: task.id, deadline: new Date(deadline).toISOString() })}>Change directly</Button></label> : null}</div> : null}
     </div> : null}
 
     {request ? <div className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4"><h3 className="text-sm font-bold text-slate-900">Request a change</h3><Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Why is this change needed?" className="mt-2 bg-white" /><div className="mt-3 grid gap-3 sm:grid-cols-2"><label className="text-xs font-semibold text-slate-600">Requested assignee<select value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)} className="mt-1 h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm">{activeUsers.map((user) => <option key={user.id} value={user.id}>{user.displayName}</option>)}</select><Button size="sm" className="mt-2" disabled={busy || !reason.trim() || assigneeId === task.assigneeId} onClick={() => void onMutation({ action: "request-reassign", taskId: task.id, requestedAssigneeId: assigneeId, reason: reason.trim() })}>Request reassign</Button></label><label className="text-xs font-semibold text-slate-600">Requested deadline<Input type="datetime-local" value={deadline} onChange={(event) => setDeadline(event.target.value)} className="mt-1 bg-white" /><Button size="sm" className="mt-2" disabled={busy || !reason.trim()} onClick={() => void onMutation({ action: "request-deadline", taskId: task.id, requestedDeadline: new Date(deadline).toISOString(), reason: reason.trim() })}>Request deadline</Button></label></div></div> : null}
 
-    {canArchiveTask(currentUser) ? <div className="rounded-2xl border border-slate-200 bg-white p-4">{details.archive ? <><p className="mb-2 text-xs text-slate-500">Archived {displayDate(details.archive.archivedAt)} by {userName(users, details.archive.archivedBy)}. Restoring preserves the same task id, status, and complete history.</p><Button variant="outline" disabled={busy} onClick={() => void onMutation({ action: "restore", taskId: task.id })}><RotateCcw className="size-4" /> Restore same task</Button></> : <><p className="text-xs text-slate-500">“Delete” is a soft archive. Task identity, workflow status, Content OS links, and history are retained.</p><Button variant="outline" className="mt-2 text-amber-700" disabled={busy} onClick={() => { if (window.confirm(`Archive “${task.title}”? This hides it from normal views but keeps its status and history.`)) void onMutation({ action: "archive", taskId: task.id, ...(reason.trim() ? { reason: reason.trim() } : {}) }); }}><Archive className="size-4" /> Archive (soft delete)</Button></>}</div> : null}
+    {capabilities.canArchive || capabilities.canRestore ? <div className="rounded-2xl border border-slate-200 bg-white p-4">{details.archive ? <><p className="mb-2 text-xs text-slate-500">Archived {displayDate(details.archive.archivedAt)} by {userName(users, details.archive.archivedBy)}. Restoring preserves the same task id, status, and complete history. Change requests cancelled by the archive stay cancelled.</p><Button variant="outline" disabled={busy} onClick={() => void onMutation({ action: "restore", taskId: task.id })}><RotateCcw className="size-4" /> Restore same task</Button></> : <><p className="text-xs text-slate-500">“Delete” is a soft archive. Task identity, workflow status, Content OS links, and history are retained. Pending change requests are cancelled. The Task Bot refuses archiving an active Blog review pair.</p><Button variant="outline" className="mt-2 text-amber-700" disabled={busy} onClick={() => { if (window.confirm(`Archive “${task.title}”? This hides it from normal views, keeps its status and history, and cancels its pending change requests.`)) void onMutation({ action: "archive", taskId: task.id, ...(reason.trim() ? { reason: reason.trim() } : {}) }); }}><Archive className="size-4" /> Archive (soft delete)</Button></>}</div> : null}
 
     {details.deadlineRequests.length || details.reassignRequests.length ? <div className="rounded-2xl border border-slate-200 bg-white p-4"><h3 className="text-sm font-bold text-slate-900">Change requests</h3><div className="mt-3 space-y-2">{[
       ...details.deadlineRequests.map((entry) => ({ id: entry.id, label: "Deadline", value: displayDate(entry.requestedDeadline), status: entry.status, createdAt: entry.createdAt })),
@@ -229,18 +257,21 @@ function TaskDetailPanel({ details, users, currentUser, busy, onMutation }: {
 
 export function TeamTaskManagement({ currentUser }: { currentUser: CurrentUser }) {
   const [view, setView] = useState<TaskView>("my");
-  const [tasks, setTasks] = useState<readonly TaskBackendTask[]>([]);
+  const [tasks, setTasks] = useState<readonly TaskWithCapabilities[]>([]);
   const [users, setUsers] = useState<readonly TaskBackendUser[]>([]);
   const [requests, setRequests] = useState<TaskBackendChangeRequests>(EMPTY_REQUESTS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [details, setDetails] = useState<TaskBackendDetails | null>(null);
+  const [capabilities, setCapabilities] = useState<TaskCapabilities | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadDetails = useCallback(async (taskId: string) => {
-    const result = await api<{ details: TaskBackendDetails }>(`/api/team/tasks?resource=task&taskId=${encodeURIComponent(taskId)}`);
+    const result = await api<{ details: TaskBackendDetails; capabilities: TaskCapabilities }>(`/api/team/tasks?resource=task&taskId=${encodeURIComponent(taskId)}`);
     setDetails(result.details);
+    setCapabilities(result.capabilities);
   }, []);
 
   const load = useCallback(async () => {
@@ -249,7 +280,7 @@ export function TeamTaskManagement({ currentUser }: { currentUser: CurrentUser }
     try {
       const scope = view === "archived" ? "archived" : view === "my" ? "my" : "all";
       const [taskResult, userResult, requestResult] = await Promise.all([
-        api<{ tasks: TaskBackendTask[] }>(`/api/team/tasks?resource=tasks&scope=${scope}`),
+        api<{ tasks: TaskWithCapabilities[] }>(`/api/team/tasks?resource=tasks&scope=${scope}`),
         api<{ users: TaskBackendUser[] }>("/api/team/tasks?resource=users"),
         view === "requests" ? api<{ requests: TaskBackendChangeRequests }>("/api/team/tasks?resource=requests") : Promise.resolve({ requests: EMPTY_REQUESTS }),
       ]);
@@ -277,36 +308,42 @@ export function TeamTaskManagement({ currentUser }: { currentUser: CurrentUser }
     return () => window.clearInterval(interval);
   }, [load]);
 
-  async function mutate(body: Record<string, unknown>) {
+  /** Success = the Task Bot committed the mutation. Telegram delivery is the Task Bot's outbox, never a UI failure. */
+  async function run(send: () => Promise<unknown>) {
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      await api("/api/team/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      await load();
-      if (selectedId) await loadDetails(selectedId).catch(() => { setSelectedId(null); setDetails(null); });
+      await send();
+      setNotice("Saved.");
     } catch (caught) {
+      // A stale view (409) or refused action: show why, then re-read authoritative state.
       setError(caught instanceof Error ? caught.message : "Task action failed.");
-      await load();
     } finally {
+      await load();
+      if (selectedId) await loadDetails(selectedId).catch(() => { setSelectedId(null); setDetails(null); setCapabilities(null); });
       setBusy(false);
     }
   }
+  const mutate = (body: Record<string, unknown>) => run(() => api("/api/team/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+  const workflow = (body: Record<string, unknown>) => run(() => workflowApi(body));
 
   const userById = useMemo(() => new Map(users.map((user) => [user.id, user])), [users]);
   const tabs: Array<{ id: TaskView; label: string }> = [
     { id: "my", label: "My tasks" },
     { id: "all", label: "All tasks" },
-    ...(isHead(currentUser) ? [{ id: "requests" as const, label: "Requests" }, { id: "archived" as const, label: "Archived" }] : []),
+    ...(currentUser.role === "HEAD_OF_MARKETING" ? [{ id: "requests" as const, label: "Requests" }, { id: "archived" as const, label: "Archived" }] : []),
   ];
 
   return <div className="flex h-full min-h-0 flex-col bg-[#F7F9FC]">
     <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 lg:px-6"><div className="flex flex-wrap items-center gap-3"><div className="mr-auto"><h1 className="text-xl font-bold tracking-[-0.02em] text-slate-950">Team tasks</h1><p className="text-xs text-slate-500">One Task Bot record, one permission model, Telegram notifications included.</p></div><Button variant="outline" size="sm" disabled={loading} onClick={() => void load()}><RefreshCw className={`size-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button><CreateTaskPanel users={users} currentUser={currentUser} onCreated={load} /></div><div className="mt-4 flex gap-1 overflow-x-auto">{tabs.map((tab) => <button key={tab.id} type="button" onClick={() => { setView(tab.id); setSelectedId(null); setDetails(null); }} className={`rounded-lg px-3 py-2 text-xs font-semibold ${view === tab.id ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100"}`}>{tab.label}</button>)}</div></header>
     {error ? <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</div> : null}
+    {notice && !error ? <div className="shrink-0 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">{notice}</div> : null}
     <div className="flex min-h-0 flex-1 overflow-hidden">
       <main className={`min-h-0 flex-1 overflow-y-auto p-4 lg:p-6 ${details ? "hidden xl:block xl:max-w-[52%]" : ""}`}>
-        {view === "requests" ? <RequestsPanel requests={requests} tasks={tasks} users={users} busy={busy} onResolve={(action, requestId, approve) => mutate({ action, requestId, approve })} /> : loading && !tasks.length ? <div className="flex h-full items-center justify-center text-sm text-slate-500"><RefreshCw className="mr-2 size-4 animate-spin" /> Loading tasks…</div> : !tasks.length ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">No tasks in this view.</div> : <div className="grid gap-3 lg:grid-cols-2">{tasks.map((task) => <button key={task.id} type="button" onClick={() => { setSelectedId(task.id); void loadDetails(task.id).catch((caught) => setError(caught instanceof Error ? caught.message : "Details failed.")); }} className={`rounded-2xl border bg-white p-4 text-left transition hover:border-blue-300 hover:shadow-sm ${selectedId === task.id ? "border-blue-400 ring-2 ring-blue-100" : "border-slate-200"}`}><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-bold text-slate-950">{task.title}</p><p className="mt-1 text-[11px] text-slate-500">{userById.get(task.assigneeId)?.displayName ?? task.assigneeId.slice(0, 8)}</p></div><Badge variant="outline" className={STATUS_TONE[task.status]}>{task.status}</Badge></div><div className="mt-3 flex items-center gap-3 text-[11px] text-slate-500"><span className="flex items-center gap-1"><Clock3 className="size-3" /> {displayDate(task.deadline)}</span><span className="flex items-center gap-1"><UserRound className="size-3" /> {task.priority}</span></div></button>)}</div>}
+        {view === "requests" ? <RequestsPanel requests={requests} tasks={tasks} users={users} busy={busy} onResolve={(action, requestId, approve) => mutate({ action, requestId, approve })} /> : loading && !tasks.length ? <div className="flex h-full items-center justify-center text-sm text-slate-500"><RefreshCw className="mr-2 size-4 animate-spin" /> Loading tasks…</div> : !tasks.length ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">No tasks in this view.</div> : <div className="grid gap-3 lg:grid-cols-2">{tasks.map((task) => <button key={task.id} type="button" onClick={() => { setSelectedId(task.id); setCapabilities(null); void loadDetails(task.id).catch((caught) => setError(caught instanceof Error ? caught.message : "Details failed.")); }} className={`rounded-2xl border bg-white p-4 text-left transition hover:border-blue-300 hover:shadow-sm ${selectedId === task.id ? "border-blue-400 ring-2 ring-blue-100" : "border-slate-200"}`}><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><p className="line-clamp-2 text-sm font-bold text-slate-950">{task.title}</p><p className="mt-1 text-[11px] text-slate-500">{userById.get(task.assigneeId)?.displayName ?? task.assigneeId.slice(0, 8)}</p></div><div className="flex flex-col items-end gap-1"><Badge variant="outline" className={STATUS_TONE[task.status]}>{task.status}</Badge>{task.capabilities?.classification.kind === "CONTENT_OS" ? <Badge variant="outline" className="border-violet-200 bg-violet-50 text-violet-700">{task.capabilities.classification.code}</Badge> : null}</div></div><div className="mt-3 flex items-center gap-3 text-[11px] text-slate-500"><span className="flex items-center gap-1"><Clock3 className="size-3" /> {displayDate(task.deadline)}</span><span className="flex items-center gap-1"><UserRound className="size-3" /> {task.priority}</span></div></button>)}</div>}
       </main>
-      {details ? <aside className="min-h-0 w-full overflow-y-auto border-l border-slate-200 bg-slate-50 p-4 xl:w-[48%] xl:p-6"><div className="mb-3 flex items-center justify-between"><p className="text-xs font-semibold text-slate-500">Task details</p><Button variant="ghost" size="sm" onClick={() => { setSelectedId(null); setDetails(null); }}><X className="size-4" /> Close</Button></div><TaskDetailPanel key={`${details.task.id}:${details.task.updatedAt}:${details.archive?.archivedAt ?? "active"}`} details={details} users={users} currentUser={currentUser} busy={busy} onMutation={mutate} /></aside> : null}
+      {details ? <aside className="min-h-0 w-full overflow-y-auto border-l border-slate-200 bg-slate-50 p-4 xl:w-[48%] xl:p-6"><div className="mb-3 flex items-center justify-between"><p className="text-xs font-semibold text-slate-500">Task details</p><Button variant="ghost" size="sm" onClick={() => { setSelectedId(null); setDetails(null); setCapabilities(null); }}><X className="size-4" /> Close</Button></div>{capabilities ? <TaskDetailPanel key={`${details.task.id}:${details.task.updatedAt}:${details.archive?.archivedAt ?? "active"}`} details={details} capabilities={capabilities} users={users} busy={busy} onMutation={mutate} onWorkflow={workflow} /> : null}</aside> : null}
     </div>
   </div>;
 }
