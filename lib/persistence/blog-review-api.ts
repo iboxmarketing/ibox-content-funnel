@@ -5,15 +5,13 @@
  *
  * Security rules:
  *  - The ACTOR is never taken from the request body. It comes only from the
- *    platform-authenticated subject, resolved through ExternalActorResolver
- *    to an active public.users.id.
+ *    validated Telegram-backed server session as an active public.users.id.
  *  - Other user ids in the body (assignee, reviewer) are only proposals the
  *    Task Bot validates (must be active users).
  *  - Fail closed: no persistence configured -> 503, no signed-in user -> 401,
- *    not linked -> 403.
+ *    missing/invalid session -> 401 at the route boundary.
  */
 import { z } from "zod";
-import { ActorNotLinkedError, type ExternalActorResolver } from "./actor-resolver";
 import { BlogReviewFlow, ContentOsRuleError } from "./blog-review-flow";
 import { PersistenceConflictError, PersistenceNotConfiguredError } from "./ports";
 import { PersistenceTransportError } from "./supabase-adapter";
@@ -33,7 +31,6 @@ export type BlogReviewRequest = z.infer<typeof BlogReviewRequestSchema>;
 
 export interface BlogReviewDependencies {
   readonly flow: BlogReviewFlow;
-  readonly actors: ExternalActorResolver;
 }
 
 export interface ApiResult {
@@ -51,7 +48,6 @@ export type BlogReviewOutcome =
   | "not_configured"
   | "unauthenticated"
   | "invalid_input"
-  | "actor_not_linked"
   | "content_os_rule"
   | "content_os_conflict"
   | "task_bot_rejected"
@@ -78,7 +74,7 @@ export type BlogReviewLogger = (record: BlogReviewLogRecord) => void;
 const RETRY_SAFE = "Retry the same request; it is idempotent.";
 
 export async function handleBlogReviewRequest(
-  input: { readonly body: unknown; readonly externalSubject: string | null },
+  input: { readonly body: unknown; readonly actorId: string | null },
   deps: BlogReviewDependencies | null,
   log: BlogReviewLogger = () => {},
 ): Promise<ApiResult> {
@@ -89,14 +85,13 @@ export async function handleBlogReviewRequest(
   };
 
   if (!deps) return done("not_configured", { status: 503, body: { code: "CONTENT_OS_PERSISTENCE_NOT_CONFIGURED", error: "Content OS persistence is not configured." } });
-  if (!input.externalSubject) return done("unauthenticated", { status: 401, body: { code: "UNAUTHENTICATED", error: "Sign in required." } });
+  if (!input.actorId) return done("unauthenticated", { status: 401, body: { code: "UNAUTHENTICATED", error: "Sign in required." } });
 
   const parsed = BlogReviewRequestSchema.safeParse(input.body);
   if (!parsed.success) return done("invalid_input", { status: 400, body: { code: "INVALID_INPUT", error: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") } });
 
-  let actorId: string | null = null;
+  const actorId = input.actorId;
   try {
-    actorId = await deps.actors.resolve(input.externalSubject);
     const request = parsed.data;
     switch (request.action) {
       case "start": {
@@ -117,7 +112,6 @@ export async function handleBlogReviewRequest(
       }
     }
   } catch (error) {
-    if (error instanceof ActorNotLinkedError) return done("actor_not_linked", { status: 403, body: { code: error.code, error: "Your account is not linked to a team member." } });
     if (error instanceof ContentOsRuleError) return done("content_os_rule", { status: 409, body: { code: error.code, error: error.message } }, { actorId });
     if (error instanceof PersistenceConflictError) return done("content_os_conflict", { status: 409, body: { code: error.code, error: error.message } }, { actorId });
     if (error instanceof PersistenceNotConfiguredError) return done("not_configured", { status: 503, body: { code: error.code, error: error.message } }, { actorId });

@@ -27,7 +27,7 @@ const { BlogReviewFlow } = require(join(dir, "persistence", "blog-review-flow.js
 const { PersistenceConflictError } = require(join(dir, "persistence", "ports.js"));
 const { handleBlogReviewRequest } = require(join(dir, "persistence", "blog-review-api.js"));
 const { resolveContentOsPersistenceConfig } = require(join(dir, "persistence", "config.js"));
-const { ActorNotLinkedError, FailClosedActorResolver, SupabaseExternalActorResolver } = require(join(dir, "persistence", "actor-resolver.js"));
+const { FailClosedActorResolver, SupabaseExternalActorResolver } = require(join(dir, "persistence", "actor-resolver.js"));
 const { PostgrestClient } = require(join(dir, "persistence", "supabase-adapter.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -210,46 +210,44 @@ test("concurrency: a stale decision write cannot gate anything; reconcile re-der
 
 function apiWorld() {
   const w = world();
-  const actors = { resolve: async (subject) => { if (subject === "siwc-author") return AUTHOR; if (subject === "siwc-reviewer") return REVIEWER; throw new ActorNotLinkedError(); } };
-  return { ...w, deps: { flow: w.flow, actors } };
+  return { ...w, deps: { flow: w.flow } };
 }
 
-test("API: fail closed (503 not configured, 401 anonymous, 403 not linked) and never takes the actor from the body", async () => {
+test("API: fail closed (503 not configured, 401 anonymous) and never takes the actor from the body", async () => {
   const { deps } = apiWorld();
   const body = { action: "start", requestKey: "k", knowledgeNodeId: NODE, blogTitle: "B", assigneeId: AUTHOR, deadline: DEADLINE };
-  assert.equal((await handleBlogReviewRequest({ body, externalSubject: "siwc-author" }, null)).status, 503);
-  assert.equal((await handleBlogReviewRequest({ body, externalSubject: null }, deps)).status, 401);
-  assert.equal((await handleBlogReviewRequest({ body, externalSubject: "siwc-stranger" }, deps)).status, 403);
-  const forged = await handleBlogReviewRequest({ body: { ...body, actorId: HEAD }, externalSubject: "siwc-author" }, deps);
+  assert.equal((await handleBlogReviewRequest({ body, actorId: AUTHOR }, null)).status, 503);
+  assert.equal((await handleBlogReviewRequest({ body, actorId: null }, deps)).status, 401);
+  const forged = await handleBlogReviewRequest({ body: { ...body, actorId: HEAD }, actorId: AUTHOR }, deps);
   assert.equal(forged.status, 400, "unknown keys (e.g. actorId) are rejected by the strict schema");
-  assert.equal((await handleBlogReviewRequest({ body: { action: "nope" }, externalSubject: "siwc-author" }, deps)).status, 400);
+  assert.equal((await handleBlogReviewRequest({ body: { action: "nope" }, actorId: AUTHOR }, deps)).status, 400);
 });
 
-test("API: the full slice through the handler with resolved actors", async () => {
+test("API: the full slice through the handler with session actors", async () => {
   const w = apiWorld();
-  const call = (body, who) => handleBlogReviewRequest({ body, externalSubject: who }, w.deps);
-  const started = await call({ action: "start", requestKey: "api-1", knowledgeNodeId: NODE, blogTitle: "Blog via API", assigneeId: AUTHOR, deadline: DEADLINE }, "siwc-author");
+  const call = (body, actorId) => handleBlogReviewRequest({ body, actorId }, w.deps);
+  const started = await call({ action: "start", requestKey: "api-1", knowledgeNodeId: NODE, blogTitle: "Blog via API", assigneeId: AUTHOR, deadline: DEADLINE }, AUTHOR);
   assert.equal(started.status, 200);
   assert.equal(w.tasks.tasks.get(started.body.blogTaskId).creatorId, AUTHOR, "creator = the resolved actor");
-  const completed = await call({ action: "complete", blogTaskId: started.body.blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, "siwc-author");
+  const completed = await call({ action: "complete", blogTaskId: started.body.blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, AUTHOR);
   assert.equal(completed.status, 200);
-  const revision = await call({ action: "request-revision", reviewTaskId: completed.body.headReviewTaskId, note: "Fix" }, "siwc-reviewer");
+  const revision = await call({ action: "request-revision", reviewTaskId: completed.body.headReviewTaskId, note: "Fix" }, REVIEWER);
   assert.deepEqual([revision.status, revision.body.blogStatus, revision.body.headReviewStatus], [200, "REVISION", "BLOCKED"]);
-  const denied = await call({ action: "request-revision", reviewTaskId: completed.body.headReviewTaskId, note: "Fix" }, "siwc-author");
+  const denied = await call({ action: "request-revision", reviewTaskId: completed.body.headReviewTaskId, note: "Fix" }, AUTHOR);
   assert.equal(denied.status, 409, "the Blog author cannot decide the review");
-  const resubmitted = await call({ action: "complete", blogTaskId: started.body.blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, "siwc-author");
+  const resubmitted = await call({ action: "complete", blogTaskId: started.body.blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, AUTHOR);
   assert.equal(resubmitted.body.headReviewStatus, "ASSIGNED");
-  const approved = await call({ action: "approve", reviewTaskId: completed.body.headReviewTaskId }, "siwc-reviewer");
+  const approved = await call({ action: "approve", reviewTaskId: completed.body.headReviewTaskId }, REVIEWER);
   assert.deepEqual([approved.status, approved.body.headReviewStatus, approved.body.decision], [200, "DONE", "Approved"]);
-  const reconciled = await call({ action: "reconcile", blogTaskId: started.body.blogTaskId }, "siwc-author");
+  const reconciled = await call({ action: "reconcile", blogTaskId: started.body.blogTaskId }, AUTHOR);
   assert.deepEqual(reconciled.body.actions, []);
 });
 
 test("API: Task Bot refusals map to 403 / 409 without leaking internals", async () => {
   const w = apiWorld();
   const { blogTaskId } = await start(w);
-  const failing = { flow: { completeBlog: async () => { const e = new Error("x"); e.sqlState = "42501"; throw e; } }, actors: w.deps.actors };
-  const res = await handleBlogReviewRequest({ body: { action: "complete", blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, externalSubject: "siwc-author" }, failing);
+  const failing = { flow: { completeBlog: async () => { const e = new Error("x"); e.sqlState = "42501"; throw e; } } };
+  const res = await handleBlogReviewRequest({ body: { action: "complete", blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, actorId: AUTHOR }, failing);
   assert.deepEqual([res.status, res.body.code], [403, "FORBIDDEN"]);
 });
 
@@ -257,14 +255,11 @@ test("config: disabled by default; explicit and complete or it throws; https onl
   assert.equal(resolveContentOsPersistenceConfig({}), null);
   assert.equal(resolveContentOsPersistenceConfig({ CONTENT_OS_PERSISTENCE_ENABLED: "false" }), null);
   assert.throws(() => resolveContentOsPersistenceConfig({ CONTENT_OS_PERSISTENCE_ENABLED: "yes" }), /not recognized/);
-  assert.throws(() => resolveContentOsPersistenceConfig({ CONTENT_OS_PERSISTENCE_ENABLED: "true" }), /CONTENT_OS_SUPABASE_URL, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY, CONTENT_OS_IDENTITY_TENANT_KEY are missing/);
-  const base = { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: "k", CONTENT_OS_IDENTITY_TENANT_KEY: "t" };
+  assert.throws(() => resolveContentOsPersistenceConfig({ CONTENT_OS_PERSISTENCE_ENABLED: "true" }), /CONTENT_OS_SUPABASE_URL, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY are missing/);
+  const base = { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: "k" };
   assert.throws(() => resolveContentOsPersistenceConfig({ ...base, CONTENT_OS_SUPABASE_URL: "http://x" }), /https/);
   const full = { ...base, CONTENT_OS_SUPABASE_URL: "https://x.supabase.co" };
-  for (const trust of [undefined, "", "true", "openai_sites_dispatch", "OPENAI_SIWC"]) {
-    assert.throws(() => resolveContentOsPersistenceConfig({ ...full, CONTENT_OS_IDENTITY_TRUST: trust }), /CONTENT_OS_IDENTITY_TRUST must be "OPENAI_SITES_DISPATCH"/, String(trust));
-  }
-  assert.deepEqual(resolveContentOsPersistenceConfig({ ...full, CONTENT_OS_IDENTITY_TRUST: "OPENAI_SITES_DISPATCH" }), { supabaseUrl: "https://x.supabase.co", serviceRoleKey: "k", identityTenantKey: "t", identityTrust: "OPENAI_SITES_DISPATCH" });
+  assert.deepEqual(resolveContentOsPersistenceConfig(full), { supabaseUrl: "https://x.supabase.co", serviceRoleKey: "k" });
 });
 
 test("actor resolution: exactly one ACTIVE link to an ACTIVE user, or fail closed", async () => {
@@ -336,20 +331,19 @@ test("9D: one structured log record per request, classified, without subject or 
   const w = apiWorld();
   const records = [];
   const log = (r) => records.push(r);
-  const call = (body, who, deps = w.deps) => handleBlogReviewRequest({ body, externalSubject: who }, deps, log);
+  const call = (body, actorId, deps = w.deps) => handleBlogReviewRequest({ body, actorId }, deps, log);
   await call({ action: "reconcile", blogTaskId: NODE }, null);
-  await call({ action: "nope" }, "siwc-author");
-  await call({ action: "reconcile", blogTaskId: NODE }, "siwc-stranger");
-  const started = await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, "siwc-author");
-  await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, "siwc-author");
-  await call({ action: "approve", reviewTaskId: started.body.blogTaskId }, "siwc-reviewer");
-  const down = { flow: { reconcile: async () => { throw new PersistenceTransportError(null, "TimeoutError"); } }, actors: w.deps.actors };
-  const res = await call({ action: "reconcile", blogTaskId: NODE }, "siwc-author", down);
+  await call({ action: "nope" }, AUTHOR);
+  const started = await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, AUTHOR);
+  await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, AUTHOR);
+  await call({ action: "approve", reviewTaskId: started.body.blogTaskId }, REVIEWER);
+  const down = { flow: { reconcile: async () => { throw new PersistenceTransportError(null, "TimeoutError"); } } };
+  const res = await call({ action: "reconcile", blogTaskId: NODE }, AUTHOR, down);
   assert.deepEqual([res.status, res.body.retryable], [503, true]);
-  const rejected = { flow: { reconcile: async () => { const e = new Error("x"); e.pgCode = "42501"; throw e; } }, actors: w.deps.actors };
-  await call({ action: "reconcile", blogTaskId: NODE }, "siwc-author", rejected);
-  assert.deepEqual(records.map((r) => r.outcome), ["unauthenticated", "invalid_input", "actor_not_linked", "ok", "ok", "content_os_rule", "transport_failure", "task_bot_rejected"]);
-  assert.deepEqual(records.slice(3, 5).map((r) => r.created), [true, false], "idempotent replay is visible");
-  assert.equal(records[7].sqlState, "42501");
-  assert.doesNotMatch(JSON.stringify(records), /siwc-|Secret title/);
+  const rejected = { flow: { reconcile: async () => { const e = new Error("x"); e.pgCode = "42501"; throw e; } } };
+  await call({ action: "reconcile", blogTaskId: NODE }, AUTHOR, rejected);
+  assert.deepEqual(records.map((r) => r.outcome), ["unauthenticated", "invalid_input", "ok", "ok", "content_os_rule", "transport_failure", "task_bot_rejected"]);
+  assert.deepEqual(records.slice(2, 4).map((r) => r.created), [true, false], "idempotent replay is visible");
+  assert.equal(records[6].sqlState, "42501");
+  assert.doesNotMatch(JSON.stringify(records), /Secret title/);
 });

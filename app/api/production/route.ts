@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getContentPlanningRepository, getDataSourceMode, getSupabaseContentPlanningRepository } from "@/lib/data-source";
 import { loadForRoute } from "@/lib/data-source-route-outcome";
+import { requireAuthenticatedUser } from "@/lib/auth/server";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -8,6 +9,8 @@ export const revalidate = 0;
 const noStoreHeaders = { "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0" };
 
 export async function GET(request: Request) {
+  const auth = await requireAuthenticatedUser(request);
+  if (!auth.ok) return auth.response;
   try {
     const mode = getDataSourceMode();
     const outcome = await loadForRoute(

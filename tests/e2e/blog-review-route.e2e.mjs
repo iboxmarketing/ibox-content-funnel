@@ -3,17 +3,13 @@
  * POST /api/content-os/blog-review through the REAL built Worker (workerd),
  * the real route + handler + adapter, a Supabase-gateway emulator over TLS,
  * real PostgREST 12 and the disposable PostgreSQL 17 database built from the
- * FINAL Task Bot migrations (a9ed78a) + Content OS drafts 00..06.
+ * FINAL canonical Task Bot migrations through Sprint 10A.
  * BlogReviewFlow is never called directly; DB state is checked with SQL.
- *
- * The identity header is sent by this test directly to the Worker, which is
- * exactly what the platform dispatcher does — and also what an attacker
- * could do if the Worker were reachable without the dispatcher (see the
- * "identity header is not verified" test).
+ * Authentication goes through the real challenge/status/redeem/validate RPCs.
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { ids, rows, sql } from "./lib/db.mjs";
 import { mintKey, startGateway } from "./lib/gateway.mjs";
@@ -22,43 +18,78 @@ import { makeLocalTls, startWorker } from "./lib/worker.mjs";
 const UPSTREAM = process.env.PGRST_UPSTREAM ?? "http://172.17.0.2:3000";
 const SERVICE = mintKey("service_role");
 const DEADLINE = "2026-10-20T13:00:00.000Z";
-let tls, gw, worker, bare, unconfirmed;
+let tls, gw, worker, authOnly;
+const sessions = {};
 
 before(async () => {
   tls = makeLocalTls();
   gw = await startGateway({ upstream: UPSTREAM, apiKeys: [SERVICE], tls: { key: readFileSync(tls.key), cert: readFileSync(tls.cert) } });
-  const db = { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_URL: gw.url, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: SERVICE, CONTENT_OS_IDENTITY_TENANT_KEY: "site-e2e" };
-  // `worker` simulates a deployment whose trusted ingress the platform owner has confirmed.
-  worker = await startWorker({ caFile: tls.ca, vars: { ...db, CONTENT_OS_IDENTITY_TRUST: "OPENAI_SITES_DISPATCH" } });
-  bare = await startWorker({});
-  unconfirmed = await startWorker({ caFile: tls.ca, vars: db });
+  const auth = { CONTENT_OS_SUPABASE_URL: gw.url, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: SERVICE, CONTENT_OS_TELEGRAM_BOT_USERNAME: "ibox_e2e_bot" };
+  worker = await startWorker({ caFile: tls.ca, vars: { ...auth, CONTENT_OS_PERSISTENCE_ENABLED: "true" } });
+  authOnly = await startWorker({ caFile: tls.ca, vars: auth });
+  sessions.head = await login(9001);
+  sessions.author = await login(9002);
+  sessions.reviewer = await login(9003);
+  sessions.other = await login(9004);
 });
 after(async () => {
   worker?.stop();
-  bare?.stop();
-  unconfirmed?.stop();
+  authOnly?.stop();
   await gw?.close();
   tls?.cleanup();
 });
 
-async function call(body, subject, { base = worker.url, headers = {}, raw = null } = {}) {
-  const started = Date.now();
-  const response = await fetch(`${base}/api/content-os/blog-review`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...(subject ? { "oai-authenticated-user-id": subject, "oai-authenticated-user-email": `${subject}@sites.test` } : {}), ...headers },
-    body: raw ?? JSON.stringify(body),
+async function request(path, { base = worker.url, method = "GET", body, cookie, headers = {} } = {}) {
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers: {
+      ...(body !== undefined ? { "content-type": "application/json" } : {}),
+      ...(method !== "GET" && method !== "HEAD" ? { origin: base } : {}),
+      ...(cookie ? { cookie } : {}),
+      ...headers,
+    },
+    ...(body !== undefined ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
     signal: AbortSignal.timeout(30_000),
   });
   const text = await response.text();
   let json = null;
   try { json = JSON.parse(text); } catch { /* non-JSON */ }
-  return { status: response.status, body: json, text, ms: Date.now() - started };
+  return { response, status: response.status, body: json, text };
 }
 
-const start = (key, who = "siwc-head") => call({ action: "start", requestKey: key, knowledgeNodeId: ids.node, blogTitle: `E2E ${key}`, assigneeId: ids.author, deadline: DEADLINE }, who);
-const complete = (blogTaskId, who = "siwc-author") => call({ action: "complete", blogTaskId, reviewerId: ids.reviewer, reviewDeadline: DEADLINE }, who);
-const revise = (reviewTaskId, who = "siwc-reviewer", note = "Kirishni qisqartiring") => call({ action: "request-revision", reviewTaskId, note }, who);
-const approve = (reviewTaskId, who = "siwc-reviewer") => call({ action: "approve", reviewTaskId }, who);
+function approveChallenge(challengeId, telegramUserId) {
+  return JSON.parse(sql(`set role service_role; select row_to_json(t) from (select * from public.content_os_auth_approve_challenge('${challengeId}'::uuid, ${telegramUserId}::bigint)) t`));
+}
+
+async function login(telegramUserId, { base = worker.url } = {}) {
+  const verifier = randomBytes(32).toString("base64url");
+  const verifierHash = createHash("sha256").update(verifier).digest("hex");
+  const started = await request("/api/auth/telegram/start", { base, method: "POST", body: { verifierHash } });
+  assert.equal(started.status, 200, started.text);
+  assert.match(started.body.telegramDeepLink, new RegExp(`^https://t\\.me/ibox_e2e_bot\\?start=contentos_${started.body.challengeId}$`));
+  const approved = approveChallenge(started.body.challengeId, telegramUserId);
+  assert.equal(approved.status, "APPROVED");
+  const polled = await request(`/api/auth/telegram/status?challengeId=${started.body.challengeId}`, { base });
+  assert.deepEqual([polled.status, polled.body.status], [200, "APPROVED"]);
+  const completed = await request("/api/auth/telegram/complete", { base, method: "POST", body: { challengeId: started.body.challengeId, verifier } });
+  assert.equal(completed.status, 200, completed.text);
+  const setCookie = completed.response.headers.get("set-cookie") ?? "";
+  assert.match(setCookie, /; Path=\/; Max-Age=2592000; HttpOnly; SameSite=Strict/);
+  const cookie = setCookie.split(";", 1)[0];
+  assert.match(cookie ?? "", /^content_os_session=[A-Za-z0-9_-]{43}$/);
+  return cookie;
+}
+
+async function call(body, cookie, { base = worker.url, headers = {}, raw = null } = {}) {
+  const started = Date.now();
+  const result = await request("/api/content-os/blog-review", { base, method: "POST", body: raw ?? body, cookie, headers });
+  return { ...result, ms: Date.now() - started };
+}
+
+const start = (key, cookie = sessions.head) => call({ action: "start", requestKey: key, knowledgeNodeId: ids.node, blogTitle: `E2E ${key}`, assigneeId: ids.author, deadline: DEADLINE }, cookie);
+const complete = (blogTaskId, cookie = sessions.author) => call({ action: "complete", blogTaskId, reviewerId: ids.reviewer, reviewDeadline: DEADLINE }, cookie);
+const revise = (reviewTaskId, cookie = sessions.reviewer, note = "Kirishni qisqartiring") => call({ action: "request-revision", reviewTaskId, note }, cookie);
+const approve = (reviewTaskId, cookie = sessions.reviewer) => call({ action: "approve", reviewTaskId }, cookie);
 const status = (id) => sql(`select status from public.tasks where id = '${id}'`);
 const task = (id) => rows(`select status, blocked_reason, assignee_id, creator_id from public.tasks where id = '${id}'`)[0];
 const events = (id) => rows(`select event_type, metadata from public.task_events where task_id = '${id}' order by created_at, id`);
@@ -75,33 +106,74 @@ const snapshot = (blogTaskId, reviewTaskId) => ({
 
 test("no persistence config -> 503 (nothing called)", async () => {
   const before = gw.log.length;
-  const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, "siwc-author", { base: bare.url });
+  const authOnlyCookie = await login(9002, { base: authOnly.url });
+  const callsAfterLogin = gw.log.length;
+  const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, authOnlyCookie, { base: authOnly.url });
   assert.deepEqual([res.status, res.body.code], [503, "CONTENT_OS_PERSISTENCE_NOT_CONFIGURED"]);
-  assert.equal(gw.log.length, before);
+  assert.ok(callsAfterLogin > before);
+  assert.equal(gw.log.length, callsAfterLogin + 1, "only session validation reached the database");
 });
 
-test("anonymous -> 401; unknown / revoked / wrong-tenant / inactive-user identities -> 403", async () => {
+test("anonymous and forged Sites identity headers are both denied", async () => {
   assert.equal((await call({ action: "reconcile", blogTaskId: randomUUID() }, null)).status, 401);
-  for (const subject of ["siwc-unknown", "siwc-revoked", "siwc-other-tenant", "siwc-former"]) {
-    const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, subject);
-    assert.deepEqual([res.status, res.body.code], [403, "EXTERNAL_IDENTITY_NOT_LINKED"], subject);
+  const forged = await call({ action: "reconcile", blogTaskId: randomUUID() }, null, { headers: { "oai-authenticated-user-id": "siwc-head" } });
+  assert.deepEqual([forged.status, forged.body.code], [401, "UNAUTHENTICATED"]);
+});
+
+test("real login RPC flow yields current role, second device, one-device logout, and replay refusal", async () => {
+  const first = await request("/api/auth/me", { cookie: sessions.author });
+  assert.deepEqual([first.status, first.body.user.id, first.body.user.role], [200, ids.author, "CONTENT_MARKETER"]);
+  const secondDevice = await login(9002);
+  assert.notEqual(secondDevice, sessions.author);
+  const loggedOut = await request("/api/auth/logout", { method: "POST", body: {}, cookie: sessions.author });
+  assert.equal(loggedOut.status, 204);
+  assert.equal((await request("/api/auth/me", { cookie: sessions.author })).status, 401);
+  assert.equal((await request("/api/auth/me", { cookie: secondDevice })).status, 200, "other device remains valid");
+  sessions.author = secondDevice;
+});
+
+test("unknown/inactive approvals are generic denials; wrong proof and redemption replay fail without duplicate sessions", async () => {
+  const begin = async () => {
+    const verifier = randomBytes(32).toString("base64url");
+    const verifierHash = createHash("sha256").update(verifier).digest("hex");
+    const started = await request("/api/auth/telegram/start", { method: "POST", body: { verifierHash } });
+    assert.equal(started.status, 200);
+    return { verifier, ...started.body };
+  };
+  for (const telegramId of [999999, 9005]) {
+    const challenge = await begin();
+    const denied = approveChallenge(challenge.challengeId, telegramId);
+    assert.equal(denied.status, "DENIED");
+    const polled = await request(`/api/auth/telegram/status?challengeId=${challenge.challengeId}`);
+    assert.equal(polled.body.status, "CANCELLED", "browser learns no account detail");
   }
+
+  const challenge = await begin();
+  approveChallenge(challenge.challengeId, 9004);
+  const before = Number(sql(`select count(*) from private.content_os_web_sessions where user_id = '${ids.other}'`));
+  const wrong = await request("/api/auth/telegram/complete", { method: "POST", body: { challengeId: challenge.challengeId, verifier: randomBytes(32).toString("base64url") } });
+  assert.deepEqual([wrong.status, wrong.body.reason], [401, "INVALID_PROOF"]);
+  const completed = await request("/api/auth/telegram/complete", { method: "POST", body: { challengeId: challenge.challengeId, verifier: challenge.verifier } });
+  assert.equal(completed.status, 200);
+  const replay = await request("/api/auth/telegram/complete", { method: "POST", body: { challengeId: challenge.challengeId, verifier: challenge.verifier } });
+  assert.deepEqual([replay.status, replay.body.reason], [410, "ALREADY_CONSUMED"]);
+  assert.equal(Number(sql(`select count(*) from private.content_os_web_sessions where user_id = '${ids.other}'`)), before + 1);
 });
 
 test("request hygiene: malformed JSON / unknown fields / actor in body -> 400; wrong content type 415; oversize 413; GET 405; cross-site 403", async () => {
-  assert.equal((await call(null, "siwc-author", { raw: "{not json" })).status, 400);
-  const forged = await call({ action: "start", requestKey: "x", knowledgeNodeId: ids.node, blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE, actorId: ids.head }, "siwc-author");
+  assert.equal((await call(null, sessions.author, { raw: "{not json" })).status, 400);
+  const forged = await call({ action: "start", requestKey: "x", knowledgeNodeId: ids.node, blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE, actorId: ids.head }, sessions.author);
   assert.deepEqual([forged.status, forged.body.code], [400, "INVALID_INPUT"]);
-  assert.equal((await call({ action: "start", requestKey: "x", knowledgeNodeId: "not-a-uuid", blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE }, "siwc-author")).status, 400);
-  const textPlain = await call({ action: "reconcile", blogTaskId: randomUUID() }, "siwc-author", { headers: { "content-type": "text/plain" } });
+  assert.equal((await call({ action: "start", requestKey: "x", knowledgeNodeId: "not-a-uuid", blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE }, sessions.author)).status, 400);
+  const textPlain = await call({ action: "reconcile", blogTaskId: randomUUID() }, sessions.author, { headers: { "content-type": "text/plain" } });
   assert.equal(textPlain.status, 415, "a form/text cross-site POST (no preflight) is refused");
-  assert.equal((await call(null, "siwc-author", { raw: JSON.stringify({ action: "approve", reviewTaskId: randomUUID(), note: "x".repeat(20_000) }) })).status, 413);
+  assert.equal((await call(null, sessions.author, { raw: JSON.stringify({ action: "approve", reviewTaskId: randomUUID(), note: "x".repeat(20_000) }) })).status, 413);
   assert.equal((await fetch(`${worker.url}/api/content-os/blog-review`, { signal: AbortSignal.timeout(30_000) })).status, 405);
   for (const headers of [{ "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "same-site" }, { origin: "https://evil.example" }]) {
-    const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, "siwc-author", { headers });
+    const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, sessions.author, { headers });
     assert.deepEqual([res.status, res.body.code], [403, "CROSS_ORIGIN_REQUEST"], JSON.stringify(headers));
   }
-  const sameOrigin = await call({ action: "reconcile", blogTaskId: randomUUID() }, "siwc-author", { headers: { "sec-fetch-site": "same-origin", origin: worker.url } });
+  const sameOrigin = await call({ action: "reconcile", blogTaskId: randomUUID() }, sessions.author, { headers: { "sec-fetch-site": "same-origin", origin: worker.url } });
   assert.notEqual(sameOrigin.status, 403);
   const preflight = await fetch(`${worker.url}/api/content-os/blog-review`, { method: "OPTIONS", headers: { origin: "https://evil.example", "access-control-request-method": "POST", "access-control-request-headers": "content-type" }, signal: AbortSignal.timeout(30_000) });
   assert.equal(preflight.headers.get("access-control-allow-origin"), null, "no CORS grant");
@@ -126,8 +198,8 @@ test("full slice through the route: start -> complete -> revision (BLOCKED) -> r
   assert.equal(task(reviewTaskId).assignee_id, ids.reviewer);
   assert.deepEqual(rows(`select entity_type, entity_id, relation from public.content_task_links where task_id = '${reviewTaskId}' order by relation`)[0], { entity_type: "BLOG", entity_id: blogId, relation: "PRIMARY" });
 
-  assert.equal((await revise(reviewTaskId, "siwc-author")).status, 409, "the Blog author cannot decide");
-  assert.equal((await revise(reviewTaskId, "siwc/odd,subject (x)&y=z")).status, 409, "an ordinary linked member cannot decide");
+  assert.equal((await revise(reviewTaskId, sessions.author)).status, 409, "the Blog author cannot decide");
+  assert.equal((await revise(reviewTaskId, sessions.other)).status, 409, "an ordinary active member cannot decide");
   const revised = await revise(reviewTaskId);
   assert.equal(revised.status, 200, revised.text);
   assert.deepEqual(task(blogTaskId).status, "REVISION");
@@ -143,9 +215,9 @@ test("full slice through the route: start -> complete -> revision (BLOCKED) -> r
   assert.equal(task(reviewTaskId).blocked_reason, null);
   assert.deepEqual(headReviewsOf(blogTaskId), [{ task_id: reviewTaskId }], "SAME Head Review, none added");
 
-  const reconciled = await call({ action: "reconcile", blogTaskId }, "siwc-author");
+  const reconciled = await call({ action: "reconcile", blogTaskId }, sessions.author);
   assert.deepEqual([reconciled.status, reconciled.body.actions], [200, []]);
-  assert.equal((await approve(reviewTaskId, "siwc-head")).status, 409, "only the review assignee completes it");
+  assert.equal((await approve(reviewTaskId, sessions.head)).status, 409, "only the review assignee completes it");
   const approved = await approve(reviewTaskId);
   assert.equal(approved.status, 200, approved.text);
   assert.deepEqual([status(reviewTaskId), approved.body.decision], ["DONE", "Approved"]);
@@ -156,7 +228,7 @@ test("full slice through the route: start -> complete -> revision (BLOCKED) -> r
 test("Head decides a revision; second cycle reuses the SAME Head Review", async () => {
   const { blogTaskId } = (await start(`head-${randomUUID()}`)).body;
   const reviewTaskId = (await complete(blogTaskId)).body.headReviewTaskId;
-  assert.equal((await revise(reviewTaskId, "siwc-head", "Head: sarlavha")).status, 200);
+  assert.equal((await revise(reviewTaskId, sessions.head, "Head: sarlavha")).status, 200);
   assert.deepEqual([status(blogTaskId), status(reviewTaskId)], ["REVISION", "BLOCKED"]);
   assert.equal((await complete(blogTaskId)).body.headReviewStatus, "ASSIGNED");
   assert.equal((await revise(reviewTaskId)).status, 200, "the reviewer picks it up (ASSIGNED -> IN_PROGRESS) and sends it back again");
@@ -239,8 +311,8 @@ test("response lost after commit (Blog creation, Head Review creation, revision,
 });
 
 test("a database API that never answers is cut off by the route timeout (503, not a hung request)", async () => {
-  gw.faults.push({ match: (e) => e.path === "/rest/v1/external_identity_links", mode: "hang" });
-  const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, "siwc-author");
+  gw.faults.push({ match: (e) => e.path === "/rest/v1/content_task_runtime", mode: "hang" });
+  const res = await call({ action: "reconcile", blogTaskId: randomUUID() }, sessions.author);
   assert.deepEqual([res.status, res.body.code], [503, "PERSISTENCE_TRANSPORT_FAILURE"]);
   assert.ok(res.ms < 20_000, `took ${res.ms}ms`);
 });
@@ -268,24 +340,16 @@ test("states the Task Bot would refuse with 40001 are refused by Content OS firs
   assert.equal(Number(sql("select count(*) from pg_stat_activity where usename = 'authenticator' and state <> 'idle' and query not like 'LISTEN%'")), 0, "no request is stuck in the database");
 });
 
-test("direct spoof without a confirmed trust boundary fails closed: Head / reviewer / author / arbitrary / wrong tenant -> 503, nothing read or written", async () => {
-  const before = gw.log.length;
-  const tasks = Number(sql("select count(*) from public.tasks"));
-  for (const subject of ["siwc-head", "siwc-reviewer", "siwc-author", "anything-at-all", "siwc-other-tenant"]) {
-    for (const body of [{ action: "start", requestKey: `spoof-${randomUUID()}`, knowledgeNodeId: ids.node, blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE }, { action: "reconcile", blogTaskId: randomUUID() }]) {
-      const res = await call(body, subject, { base: unconfirmed.url });
-      assert.deepEqual([res.status, res.body.code], [503, "CONTENT_OS_PERSISTENCE_CONFIG_ERROR"], subject);
-    }
-  }
-  assert.equal(gw.log.length, before, "no database API call was made");
-  assert.equal(Number(sql("select count(*) from public.tasks")), tasks);
-});
-
-test("DELEGATED TRUST (documents the residual risk): with the acknowledgement set, the app acts on whatever identity header reaches it", async () => {
-  // Same request a browser would get injected by the dispatcher — sent straight to the Worker.
-  const res = await start(`spoof-${randomUUID()}`, "siwc-head");
-  assert.equal(res.status, 200);
-  assert.equal(task(res.body.blogTaskId).creator_id, ids.head, "the Worker trusted the header as the Head");
+test("current role is refreshed and deactivation immediately revokes the existing session", async () => {
+  assert.equal((await request("/api/auth/me", { cookie: sessions.other })).body.user.role, "SMM_MANAGER");
+  sql(`update public.users set role = 'SEO_SPECIALIST' where id = '${ids.other}'`);
+  assert.equal((await request("/api/auth/me", { cookie: sessions.other })).body.user.role, "SEO_SPECIALIST");
+  sql(`update public.users set is_active = false where id = '${ids.other}'`);
+  assert.equal((await request("/api/auth/me", { cookie: sessions.other })).status, 401);
+  sql(`update public.users set is_active = true, role = 'SMM_MANAGER' where id = '${ids.other}'`);
+  assert.equal((await request("/api/auth/me", { cookie: sessions.other })).status, 401, "reactivation does not revive a revoked session");
+  sessions.other = await login(9004);
+  assert.equal((await request("/api/auth/me", { cookie: sessions.other })).status, 200);
 });
 
 test("logs: one structured record per request, classified, without key / subject / body", async () => {
@@ -293,8 +357,8 @@ test("logs: one structured record per request, classified, without key / subject
   const out = worker.output();
   const records = out.split("\n").map((line) => line.slice(line.indexOf("{"))).filter((line) => line.includes('"event":"content_os.blog_review"')).map((line) => JSON.parse(line));
   const outcomes = new Set(records.map((r) => r.outcome));
-  for (const expected of ["ok", "unauthenticated", "actor_not_linked", "invalid_input", "content_os_rule", "transport_failure"]) assert.ok(outcomes.has(expected), expected);
+  for (const expected of ["ok", "invalid_input", "content_os_rule", "transport_failure"]) assert.ok(outcomes.has(expected), expected);
   assert.ok(records.some((r) => r.created === false), "idempotent replays are visible");
   assert.ok(!out.includes(SERVICE) && !out.includes(SERVICE.split(".")[2]), "the key is never printed");
-  assert.ok(!/siwc-|Kirishni|E2E /.test(records.map((r) => JSON.stringify(r)).join("\n")), "no subject or request content in the records");
+  assert.ok(!/Kirishni|E2E /.test(records.map((r) => JSON.stringify(r)).join("\n")), "no request content in the records");
 });

@@ -8,6 +8,8 @@ import { buildTrackingPreview } from "@/lib/tracking-preview-fixtures";
 import { getCatalogRepository, getDataSourceMode, getSupabaseCatalogRepository } from "@/lib/data-source";
 import { loadForRoute } from "@/lib/data-source-route-outcome";
 import { buildRealSnapshotRegressionPreview, isManagedLocalPreview, REAL_SNAPSHOT_FIXTURE_ID } from "@/lib/preview-fixtures";
+import { requireAuthenticatedUser } from "@/lib/auth/server";
+import { readSameOriginJson } from "@/lib/auth/request-security";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -23,6 +25,8 @@ const fixturePreviews = () => ({
 });
 
 export async function GET(request: Request) {
+  const auth = await requireAuthenticatedUser(request);
+  if (!auth.ok) return auth.response;
   const url = new URL(request.url);
   if (isManagedLocalPreview(request.url) && url.searchParams.get("fixture") === REAL_SNAPSHOT_FIXTURE_ID) {
     return NextResponse.json({
@@ -68,6 +72,10 @@ export async function GET(request: Request) {
 }
 
 async function rejectMutation(request: Request) {
+  const auth = await requireAuthenticatedUser(request);
+  if (!auth.ok) return auth.response;
+  const body = await readSameOriginJson(request);
+  if (!body.ok) return body.response;
   const rejection = rejectCatalogPreviewMutation({ url: request.url, method: request.method });
   return NextResponse.json(rejection.body, { status: rejection.status, headers: noStoreHeaders });
 }

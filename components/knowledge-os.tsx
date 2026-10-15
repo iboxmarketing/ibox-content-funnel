@@ -31,6 +31,7 @@ import { ContentOsStoreProvider } from "@/components/content-os-store-provider";
 import { TaskRuntimeStoreProvider } from "@/components/task-runtime-store-provider";
 import { ContentEntityStoreProvider } from "@/components/content-entity-store-provider";
 import { LocalPrototypeBanner } from "@/components/local-prototype-banner";
+import { SessionControl } from "@/components/session-control";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -221,7 +222,7 @@ function LoadingState() {
   );
 }
 
-export function KnowledgeOS() {
+export function KnowledgeOS({ currentUser }: { currentUser: { displayName: string; role: string } }) {
   const [scheduleOverrides, setScheduleOverrides] = useState<ScheduleOverrides>({});
   const simulation = Object.keys(scheduleOverrides).length > 0;
   const [activeView, setActiveView] = useState<MainView>("mindmap");
@@ -537,6 +538,7 @@ export function KnowledgeOS() {
         </SidebarContent>
         <SidebarFooter className="border-t border-white/10 p-3">
           <div className="flex items-center gap-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5 text-[11px] text-blue-100/70"><span className={`size-2 shrink-0 rounded-full ${syncError || catalogError ? "bg-amber-400" : graph || production || catalogPreview ? "bg-emerald-400" : "bg-slate-400"}`} /><span className="truncate group-data-[collapsible=icon]:hidden">{syncError || catalogError ? "Sync warning" : graph || production || catalogPreview ? "Google Sheets connected" : "Setup required"}</span></div>
+          <div className="mt-2 overflow-hidden rounded-xl bg-white/5 px-3 py-2.5"><SessionControl displayName={currentUser.displayName} role={currentUser.role} /></div>
         </SidebarFooter>
       </Sidebar>
 
