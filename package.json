@@ -50,6 +50,8 @@
     "test:persistence-adapter": "node --test tests/persistence-adapter.test.mjs",
     "test:blog-review-lineage": "node --test tests/blog-review-lineage.test.mjs",
     "test:blog-review-recovery": "node --test tests/blog-review-recovery.test.mjs",
+    "test:e2e:setup": "bash tests/e2e/setup.sh",
+    "test:e2e": "node --test --test-concurrency=1 tests/e2e/postgrest-adapter.e2e.mjs tests/e2e/blog-review-route.e2e.mjs",
     "test:material-production": "node --test tests/material-production.test.mjs",
     "test:task-runtime-handlers": "node --test tests/task-runtime-handlers.test.mjs"
   },
