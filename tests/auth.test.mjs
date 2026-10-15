@@ -191,7 +191,13 @@ test("10E rate key: browser-supplied IP headers and rate keys are ignored; only 
   assert.equal(forged.rateKeyHash, base);
   const noCf = await derive({ "x-forwarded-for": "1.2.3.4", "x-rate-key": "a".repeat(64) });
   assert.deepEqual(noCf, { ok: false, reason: "CLIENT_IP_MISSING" }, "no Cloudflare IP in production -> fail closed, never an 'unknown' bucket");
-  assert.deepEqual(await derive({ "cf-connecting-ip": "not an ip; drop table" }), { ok: false, reason: "CLIENT_IP_MISSING" });
+  for (const malformed of ["not an ip; drop table", "999.999.999.999", "....", "1:2:3:4:5:6:7:8:9", "deadbeef"]) {
+    assert.deepEqual(
+      await derive({ "cf-connecting-ip": malformed }),
+      { ok: false, reason: "CLIENT_IP_MISSING" },
+      `malformed trusted IP must fail closed: ${malformed}`,
+    );
+  }
 });
 
 test("10E rate key: missing / short pepper in production fails closed; development is explicit and loopback-only", async () => {

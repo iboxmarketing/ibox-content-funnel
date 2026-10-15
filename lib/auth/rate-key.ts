@@ -25,7 +25,25 @@ export const DEVELOPMENT_CLIENT_KEY = "loopback-development-client";
 export const MIN_PEPPER_LENGTH = 32;
 const MESSAGE_PREFIX = "content-os-login-rate-key:v1:";
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-const CLIENT_IP = /^[0-9A-Fa-f:.]{2,45}$/;
+
+function normalizeTrustedClientIp(value: string): string | null {
+  if (value.includes(":")) {
+    try {
+      // URL's host parser validates compressed IPv6 and IPv4-mapped IPv6 using
+      // the same Web Platform primitive available in the Workers runtime.
+      new URL(`http://[${value}]/`);
+      return value.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+
+  const octets = value.split(".");
+  if (octets.length !== 4 || octets.some((octet) => !/^(0|[1-9]\d{0,2})$/.test(octet) || Number(octet) > 255)) {
+    return null;
+  }
+  return value;
+}
 
 export type RateKeyFailure = "INSECURE_ORIGIN" | "PEPPER_MISSING" | "CLIENT_IP_MISSING";
 export type RateKeyResult =
@@ -55,7 +73,7 @@ export async function deriveLoginRateKey(input: {
   if (!pepper) return { ok: false, reason: "PEPPER_MISSING" };
 
   const rawIp = input.headers.get("cf-connecting-ip")?.trim() ?? "";
-  const clientKey = CLIENT_IP.test(rawIp) ? rawIp.toLowerCase() : development ? DEVELOPMENT_CLIENT_KEY : null;
+  const clientKey = normalizeTrustedClientIp(rawIp) ?? (development ? DEVELOPMENT_CLIENT_KEY : null);
   if (!clientKey) return { ok: false, reason: "CLIENT_IP_MISSING" };
 
   return { ok: true, rateKeyHash: await hmacSha256Hex(pepper, `${MESSAGE_PREFIX}${clientKey}`), mode: development ? "development" : "production" };
