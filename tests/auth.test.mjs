@@ -87,7 +87,7 @@ test("same-origin JSON boundary rejects cross-site, missing origin, wrong host/t
 test("auth repository uses the exact canonical Task Bot RPC contract and validates role output", async () => {
   const calls = [];
   const rows = [
-    [{ challenge_id: "10000000-0000-4000-8000-000000000001", status: "PENDING", expires_at: "2026-10-15T12:00:00+00:00" }],
+    [{ challenge_id: "10000000-0000-4000-8000-000000000001", status: "PENDING", expires_at: "2026-10-15T12:00:00+00:00", display_code: "472851" }],
     [{ status: "APPROVED", expires_at: "2026-10-15T12:00:00+00:00" }],
     [{ status: "REDEEMED", session_id: "20000000-0000-4000-8000-000000000001", authenticated_user_id: "30000000-0000-4000-8000-000000000001", display_name: "Author", role: "CONTENT_MARKETER", expires_at: "2026-11-14T12:00:00+00:00" }],
     [{ status: "VALID", session_id: "20000000-0000-4000-8000-000000000001", authenticated_user_id: "30000000-0000-4000-8000-000000000001", display_name: "Author", role: "SEO_SPECIALIST", expires_at: "2026-11-14T12:00:00+00:00" }],
@@ -97,7 +97,7 @@ test("auth repository uses the exact canonical Task Bot RPC contract and validat
     calls.push({ fn, body: JSON.parse(init.body) });
     return rows.shift();
   });
-  await repository.createChallenge("a".repeat(64));
+  await repository.createChallenge("a".repeat(64), "c".repeat(64));
   await repository.getChallengeStatus("10000000-0000-4000-8000-000000000001");
   const redeemed = await repository.redeemChallenge({ challengeId: "10000000-0000-4000-8000-000000000001", verifierHash: "a".repeat(64), sessionTokenHash: "b".repeat(64) });
   const current = await repository.validateSession("b".repeat(64));
@@ -111,20 +111,21 @@ test("auth repository uses the exact canonical Task Bot RPC contract and validat
     "content_os_auth_validate_session",
     "content_os_auth_revoke_session",
   ]);
+  assert.deepEqual(calls[0].body, { p_verifier_hash: "a".repeat(64), p_rate_key_hash: "c".repeat(64) }, "create takes only proofs and the server-derived rate key");
   assert.equal(JSON.stringify(calls).includes("telegram_user_id"), false);
 });
 
 // --- Sprint 10D: matching code, rate limit, terminal states, __Host- cookie -------------------------
 
 const cookie = require(join(dir, "auth/session-cookie.js"));
-const { startLogin, loginRateKey, formatConfirmationCode } = require(join(dir, "auth/login-start.js"));
+const { startLogin, loginRateKeyHash, formatConfirmationCode } = require(join(dir, "auth/login-start.js"));
 const { challengeView, shouldKeepPolling, pollDelayMs, CONFIRMATION_INSTRUCTION } = require(join(dir, "auth/login-states.js"));
 const CHALLENGE = "9f0c1b7e-1111-4222-8333-444455556666";
-const pending = (extra = {}) => ({ challenge_id: CHALLENGE, status: "PENDING", expires_at: "2026-10-15T10:10:00.000Z", confirmation_code: "472851", ...extra });
+const pending = (extra = {}) => ({ challenge_id: CHALLENGE, status: "PENDING", expires_at: "2026-10-15T10:10:00.000Z", display_code: "472851", ...extra });
 const allow = { limit: async () => ({ success: true }) };
 
 test("10D login start: matching code returned with the challenge; the code is display-only, never in the redeem link", async () => {
-  const result = await startLogin({ verifierHash: "a".repeat(64), rateKey: "k", limiter: allow, challenges: { createChallenge: async () => pending() }, telegramBotUsername: "ibox_bot" });
+  const result = await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => pending() }, telegramBotUsername: "ibox_bot" });
   assert.deepEqual(result, { kind: "STARTED", challengeId: CHALLENGE, expiresAt: "2026-10-15T10:10:00.000Z", confirmationCode: "472851", telegramDeepLink: `https://t.me/ibox_bot?start=contentos_${CHALLENGE}` });
   assert.ok(!result.telegramDeepLink.includes("472851"));
   assert.equal(formatConfirmationCode("472851"), "472 851");
@@ -132,8 +133,8 @@ test("10D login start: matching code returned with the challenge; the code is di
 });
 
 test("10D login start: no confirmation code from the backend -> no login is started (fail closed)", async () => {
-  for (const row of [pending({ confirmation_code: undefined }), pending({ confirmation_code: null })]) {
-    const result = await startLogin({ verifierHash: "a".repeat(64), rateKey: "k", limiter: allow, challenges: { createChallenge: async () => row }, telegramBotUsername: "ibox_bot" });
+  for (const row of [pending({ display_code: undefined }), pending({ display_code: null })]) {
+    const result = await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => row }, telegramBotUsername: "ibox_bot" });
     assert.deepEqual(result, { kind: "CONFIRMATION_UNAVAILABLE" });
   }
 });
@@ -141,26 +142,31 @@ test("10D login start: no confirmation code from the backend -> no login is star
 test("10D login start: edge limit refuses before any DB write; backend RATE_LIMITED is honoured; neutral result", async () => {
   let created = 0;
   const challenges = { createChallenge: async () => { created += 1; return pending(); } };
-  const edge = await startLogin({ verifierHash: "a".repeat(64), rateKey: "k", limiter: { limit: async () => ({ success: false }) }, challenges, telegramBotUsername: "ibox_bot" });
+  const edge = await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: { limit: async () => ({ success: false }) }, challenges, telegramBotUsername: "ibox_bot" });
   assert.deepEqual(edge, { kind: "RATE_LIMITED", retryAfterSeconds: 60 });
   assert.equal(created, 0, "no challenge row is created when the edge limit trips");
-  const backend = await startLogin({ verifierHash: "a".repeat(64), rateKey: "k", limiter: allow, challenges: { createChallenge: async () => ({ challenge_id: null, status: "RATE_LIMITED", expires_at: null }) }, telegramBotUsername: "ibox_bot" });
-  assert.deepEqual(backend, { kind: "RATE_LIMITED", retryAfterSeconds: 60 });
+  for (const refusal of [{ pgCode: "PT429", status: 429 }, { pgCode: "PT429" }, { status: 429 }]) {
+    const backend = await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => { throw Object.assign(new Error("login challenge rate limit exceeded"), refusal); } }, telegramBotUsername: "ibox_bot" });
+    assert.deepEqual(backend, { kind: "RATE_LIMITED", retryAfterSeconds: 60 }, "Task Bot PT429 is the neutral rate-limited state");
+  }
+  await assert.rejects(() => startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => { throw Object.assign(new Error("down"), { status: 503 }); } }, telegramBotUsername: "ibox_bot" }), /down/, "other failures are not disguised as rate limiting");
+  let seen;
+  await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: { limit: async (input) => { seen = input.key; return { success: true }; } }, challenges: { createChallenge: async (_v, rateKeyHash) => { assert.equal(rateKeyHash, "c".repeat(64)); return pending(); } }, telegramBotUsername: "ibox_bot" });
+  assert.equal(seen, `login-start:${"c".repeat(64)}`, "edge and Task Bot limits use the same server-derived key");
 });
 
 test("10D rate key: derived server-side from CF-Connecting-IP only, hashed; client-chosen headers are ignored", async () => {
-  const key = await loginRateKey(new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4", "x-rate-key": "mine" }));
-  assert.match(key, /^login-start:[0-9a-f]{64}$/);
+  const key = await loginRateKeyHash(new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4", "x-rate-key": "mine" }));
+  assert.match(key, /^[0-9a-f]{64}$/, "64-hex, as the Task Bot RPC requires");
   assert.ok(!key.includes("203.0.113.7"));
-  assert.equal(key, await loginRateKey(new Headers({ "cf-connecting-ip": "203.0.113.7" })));
-  assert.equal(await loginRateKey(new Headers({ "x-forwarded-for": "9.9.9.9" })), await loginRateKey(new Headers({ "x-forwarded-for": "8.8.8.8" })), "without the Cloudflare header, client headers cannot pick a fresh bucket");
+  assert.equal(key, await loginRateKeyHash(new Headers({ "cf-connecting-ip": "203.0.113.7" })));
+  assert.equal(await loginRateKeyHash(new Headers({ "x-forwarded-for": "9.9.9.9" })), await loginRateKeyHash(new Headers({ "x-forwarded-for": "8.8.8.8" })), "without the Cloudflare header, client headers cannot pick a fresh bucket");
 });
 
-test("10D repository: accepts the matching-code / RATE_LIMITED contract and rejects malformed codes", async () => {
+test("10D repository: Task Bot display_code contract; malformed codes rejected", async () => {
   const repo = (row) => new ContentOsAuthRepository({ supabaseUrl: "https://db.test", serviceRoleKey: "k", telegramBotUsername: "ibox_bot" }, async () => [row]);
-  assert.equal((await repo(pending()).createChallenge("a".repeat(64))).confirmation_code, "472851");
-  assert.equal((await repo({ challenge_id: null, status: "RATE_LIMITED", expires_at: null }).createChallenge("a".repeat(64))).status, "RATE_LIMITED");
-  await assert.rejects(() => repo(pending({ confirmation_code: "12ab56" })).createChallenge("a".repeat(64)));
+  assert.equal((await repo(pending()).createChallenge("a".repeat(64), "c".repeat(64))).display_code, "472851");
+  await assert.rejects(() => repo(pending({ display_code: "12ab56" })).createChallenge("a".repeat(64), "c".repeat(64)));
 });
 
 test("10D login states: expired / cancelled / consumed / unavailable stop polling; polling is bounded", () => {

@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createServerAuthRepository } from "@/lib/auth/server";
 import { readSameOriginJson } from "@/lib/auth/request-security";
-import { loginRateKey, startLogin } from "@/lib/auth/login-start";
+import { loginRateKeyHash, startLogin } from "@/lib/auth/login-start";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     const { config, repository } = createServerAuthRepository();
     const result = await startLogin({
       verifierHash: input.data.verifierHash,
-      rateKey: await loginRateKey(request.headers),
+      rateKeyHash: await loginRateKeyHash(request.headers),
       limiter,
       challenges: repository,
       telegramBotUsername: config.telegramBotUsername,

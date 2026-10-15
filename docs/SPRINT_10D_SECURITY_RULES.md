@@ -64,16 +64,21 @@ switches to it without keeping a fallback.
   for human comparison only; redemption still requires the challenge id, the
   browser-held verifier, the Telegram-authenticated approval, and one-time
   consumption.
-- **Required Task Bot contract (Codex):** `content_os_auth_create_challenge`
-  returns `confirmation_code` (6 digits) on `PENDING` rows and may return
-  `status = 'RATE_LIMITED'` with no challenge; the bot shows the same code in
-  its confirmation message; expired challenges are cleaned up. Until the code
-  is present, `POST /api/auth/telegram/start` returns `503 LOGIN_UNAVAILABLE`
-  and never starts a code-less login.
+- **Task Bot contract (Codex Sprint 10D, aligned against its in-progress
+  migration `20261015151900_sprint_10d_workflow_auth_notification_hardening`):**
+  `content_os_auth_create_challenge(p_verifier_hash, p_rate_key_hash)`
+  returns `display_code` (6 digits) with the challenge, refuses abuse with
+  SQLSTATE `PT429` (HTTP 429), and cleans up old challenges; the bot shows
+  the same `display_code`. Content OS sends the server-derived rate-key hash
+  and maps `PT429` to the neutral rate-limited state. Until that contract is
+  deployed, the start call fails and `POST /api/auth/telegram/start` returns
+  `503 LOGIN_UNAVAILABLE`; a row without `display_code` is also refused, so a
+  code-less login is never started.
 - The public start endpoint is limited at the Cloudflare edge by a Workers
   Rate Limiting binding (`LOGIN_START_LIMITER`, 5 per 60 s) keyed on SHA-256
-  of Cloudflare's `CF-Connecting-IP`; nothing the browser sends selects the
-  bucket. A missing binding fails closed (503). Rate-limited responses are a
+  of Cloudflare's `CF-Connecting-IP` — the same hash the Task Bot's own limit
+  (5 per 15 min, at most 3 open challenges) uses; nothing the browser sends
+  selects either bucket. A missing binding fails closed (503). Rate-limited responses are a
   neutral `429 LOGIN_RATE_LIMITED` with `Retry-After`; the UI waits and never
   retries automatically.
 - Expired, cancelled, consumed and unavailable challenges stop polling and

@@ -33,16 +33,16 @@ const ChallengeStatusSchema = z.enum([
 export type ChallengeStatus = z.infer<typeof ChallengeStatusSchema>;
 
 /**
- * Expected Task Bot contract (Sprint 10D owner decisions 4–5; Codex-owned):
- * PENDING rows carry a 6-digit `confirmation_code` that the bot also shows;
- * RATE_LIMITED rows carry no challenge. Absent `confirmation_code` means the
- * contract is not deployed yet, and Content OS refuses to start a login.
+ * Task Bot Sprint 10D contract (Codex): the create RPC takes a server-derived
+ * rate-key hash, returns a 6-digit `display_code` that the bot also shows, and
+ * refuses abuse with SQLSTATE PT429 (HTTP 429). A row without a display code
+ * means the contract is not deployed; Content OS then refuses to start a login.
  */
 const ChallengeRowSchema = z.object({
-  challenge_id: z.string().uuid().nullable(),
-  status: z.enum(["PENDING", "RATE_LIMITED"]),
-  expires_at: z.string().datetime({ offset: true }).nullable(),
-  confirmation_code: z.string().regex(/^\d{6}$/).nullable().optional(),
+  challenge_id: z.string().uuid(),
+  status: z.literal("PENDING"),
+  expires_at: z.string().datetime({ offset: true }),
+  display_code: z.string().regex(/^\d{6}$/).nullable().optional(),
 });
 
 const ChallengeStatusRowSchema = z.object({
@@ -89,9 +89,10 @@ export class ContentOsAuthRepository {
     });
   }
 
-  async createChallenge(verifierHash: string) {
+  async createChallenge(verifierHash: string, rateKeyHash: string) {
     return one(ChallengeRowSchema, await this.db.rpc("content_os_auth_create_challenge", {
       p_verifier_hash: verifierHash,
+      p_rate_key_hash: rateKeyHash,
     }));
   }
 

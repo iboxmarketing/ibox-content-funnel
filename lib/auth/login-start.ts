@@ -17,11 +17,11 @@ export interface EdgeRateLimiter {
 }
 
 export interface ChallengeCreator {
-  createChallenge(verifierHash: string): Promise<{
-    readonly challenge_id: string | null;
-    readonly status: "PENDING" | "RATE_LIMITED";
-    readonly expires_at: string | null;
-    readonly confirmation_code?: string | null;
+  createChallenge(verifierHash: string, rateKeyHash: string): Promise<{
+    readonly challenge_id: string;
+    readonly status: "PENDING";
+    readonly expires_at: string;
+    readonly display_code?: string | null;
   }>;
 }
 
@@ -32,27 +32,39 @@ export type LoginStartResult =
   | { readonly kind: "RATE_LIMITED"; readonly retryAfterSeconds: number }
   | { readonly kind: "CONFIRMATION_UNAVAILABLE" };
 
-export async function loginRateKey(headers: Headers): Promise<string> {
-  return `login-start:${await sha256Hex(headers.get("cf-connecting-ip") ?? "unknown")}`;
+/** SHA-256 hex of Cloudflare's CF-Connecting-IP — the only input to both rate limits. */
+export async function loginRateKeyHash(headers: Headers): Promise<string> {
+  return sha256Hex(headers.get("cf-connecting-ip") ?? "unknown");
+}
+
+/** The Task Bot answers abuse with SQLSTATE PT429 (PostgREST: HTTP 429). */
+function isRateLimitRefusal(error: unknown): boolean {
+  const e = error as { pgCode?: string | null; status?: number } | null;
+  return e?.pgCode === "PT429" || e?.status === 429;
 }
 
 export async function startLogin(input: {
   readonly verifierHash: string;
-  readonly rateKey: string;
+  readonly rateKeyHash: string;
   readonly limiter: EdgeRateLimiter;
   readonly challenges: ChallengeCreator;
   readonly telegramBotUsername: string;
 }): Promise<LoginStartResult> {
-  const edge = await input.limiter.limit({ key: input.rateKey });
+  const edge = await input.limiter.limit({ key: `login-start:${input.rateKeyHash}` });
   if (!edge.success) return { kind: "RATE_LIMITED", retryAfterSeconds: LOGIN_RETRY_AFTER_SECONDS };
-  const row = await input.challenges.createChallenge(input.verifierHash);
-  if (row.status === "RATE_LIMITED") return { kind: "RATE_LIMITED", retryAfterSeconds: LOGIN_RETRY_AFTER_SECONDS };
-  if (!row.challenge_id || !row.expires_at || !row.confirmation_code) return { kind: "CONFIRMATION_UNAVAILABLE" };
+  let row;
+  try {
+    row = await input.challenges.createChallenge(input.verifierHash, input.rateKeyHash);
+  } catch (error) {
+    if (isRateLimitRefusal(error)) return { kind: "RATE_LIMITED", retryAfterSeconds: LOGIN_RETRY_AFTER_SECONDS };
+    throw error;
+  }
+  if (!row.display_code) return { kind: "CONFIRMATION_UNAVAILABLE" };
   return {
     kind: "STARTED",
     challengeId: row.challenge_id,
     expiresAt: row.expires_at,
-    confirmationCode: row.confirmation_code,
+    confirmationCode: row.display_code,
     telegramDeepLink: `https://t.me/${input.telegramBotUsername}?start=contentos_${row.challenge_id}`,
   };
 }
