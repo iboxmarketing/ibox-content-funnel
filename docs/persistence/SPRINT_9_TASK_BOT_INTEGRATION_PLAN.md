@@ -81,10 +81,12 @@ dry-run-proven reference function, in `SPRINT_9_TRANSITION_CONTRACT.md`.
   `REVISION_REQUESTED` event and a `task_revisions` row, exactly as the
   existing REVIEW → REVISION path does.
 - REVISION → DONE: the Blog's assignee; `TASK_COMPLETED` event.
-- The reviewer task's waiting state maps onto existing transitions:
-  IN_PROGRESS → BLOCKED (reason required) while the Blog is in revision,
-  BLOCKED → IN_PROGRESS (RESUME) on resubmission. Locally the reviewer goes
-  back to ASSIGNED; production uses RESUME — no new transition needed.
+- The reviewer task's waiting state maps onto existing statuses
+  (**approved, Sprint 9C**): IN_PROGRESS → BLOCKED (reason required) when the
+  revision is requested, BLOCKED → ASSIGNED on resubmission (decision
+  cleared; the reviewer accepts and reviews again), then DONE on approval.
+  Both review moves are made by the Task Bot atomically with the Blog
+  transition (Codex `a9ed78a`); see `SPRINT_9_TRANSITION_CONTRACT.md` §3–§4.
 - **Posting checklist:** today the incomplete-`#posting`-checklist rule is
   enforced only on the transition to REVIEW. Any new direct path to DONE
   (IN_PROGRESS → DONE, REVISION → DONE) must enforce the same rule.
@@ -160,6 +162,10 @@ applied independently; A2/A3 deploy order per the A2 decision.
 
 - Map local Complete / Submit / Approve / Request revision / Resubmit onto
   the A2/A3 flows; no Content OS-side status writes.
+- **Sprint 9C (local, not live):** the Blog → Head Review slice is wired
+  server-side (`app/api/content-os/blog-review/route.ts`,
+  `lib/persistence/blog-review-flow.ts`), fail-closed by default, with
+  retry/reconcile semantics in `SPRINT_9_TRANSITION_CONTRACT.md` §5–§8.
 
 ### B5. Config persistence
 

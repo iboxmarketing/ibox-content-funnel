@@ -1,15 +1,20 @@
 # Sprint 9 — Content OS transition contract (handoff to Task Bot A2/A3)
 
-Status: **DESIGN + LOCAL DRY-RUN ONLY.** Nothing applied to Supabase,
-nothing pushed or deployed. Content OS branch `sprint-9b/persistence-bridge`
-(from `ae4873d`). Task Bot implementation being finished by Codex: A2/A3 in
-`marketing-team-task-bot-sprint9a` (`199581f`) — this document says exactly
-what to change there. Content OS did not modify the Task Bot repo.
+Status: **DESIGN + LOCAL DRY-RUN + IN-PROCESS TESTS ONLY.** Nothing applied
+to Supabase, nothing pushed or deployed, **no live integration has run**.
+Content OS branch `sprint-9b/persistence-bridge` (Sprint 9B from `ae4873d`,
+Sprint 9C application wiring from `15d8402`). The Task Bot side is Codex's
+final A2/A3 function on `codex/sprint-9b-hardening` @ `a9ed78a`
+(`20261014130332_content_os_task_transition_compatibility.sql`), read
+read-only. Content OS did not modify any Task Bot repo or branch.
 
 Product rules (approved, unchanged): Blog is **not** review-required; when a
 Blog completes, one separate **Head Review** task opens; the Head Review may
 send **that same** Blog back (`DONE → REVISION`); the author fixes it
 (`REVISION → DONE`); the **same** Head Review is reused. No new statuses.
+Approved Head Review lifecycle: `IN_PROGRESS → BLOCKED` on revision request,
+`BLOCKED → ASSIGNED` on resubmission, reviewed again, `→ DONE` on approval
+(§4).
 
 ---
 
@@ -179,108 +184,147 @@ matters"). Smallest stable replacement if a Content OS task type ever needs
 the checklist: an explicit `p_attach_posting_checklist boolean` on the
 creation RPC (Task Bot change), never a title convention.
 
-## 3. Exact instructions for Codex — finish A2/A3
+## 3. Task Bot implementation (final: Codex `a9ed78a`)
 
-In `transition_task_with_events` (A2/A3 migration
-`20261014120200_content_os_task_transition_compatibility.sql`):
+The Task Bot owns `public.transition_task_with_events`; Content OS only
+supplies the predicates above and calls the RPC. The final function
+(`codex/sprint-9b-hardening` @ `a9ed78a`) does exactly this:
 
-1. **Keep** the legacy matrix and everything after it unchanged.
-2. Replace the Content OS branch (only reached when the legacy matrix
-   refuses). A complete, **dry-run-proven** reference body is in
-   `docs/persistence/reference/transition_task_with_events.sprint9b.sql`
-   (reference only; the Task Bot owns the real migration). The branch:
-
-```sql
--- declare: v_review_task_id uuid;
--- The OUTER IF tests only to_regprocedure. PL/pgSQL plans a whole IF
--- condition as one expression, so a content_os_* call in the same condition
--- would fail to plan (and break every legacy transition) whenever the Content
--- OS schema is absent. Keep the calls in the nested IF.
-if not v_allowed
-  and ((v_old_status in ('IN_PROGRESS', 'REVISION') and p_new_status = 'DONE')
-    or (v_old_status = 'DONE' and p_new_status = 'REVISION'))
-  and to_regprocedure('public.content_os_find_revision_review(uuid, uuid)') is not null then
-  if public.content_os_is_task(p_task_id) then
-    if p_new_status = 'DONE' then
-      if public.content_os_requires_review(p_task_id) then
-        raise exception 'task status changed concurrently' using errcode = '40001';
-      end if;
-      if v_task.assignee_id <> p_actor_id then
-        raise exception 'only the assignee may complete this Content OS task' using errcode = '42501';
-      end if;
-      if not public.content_os_completion_allowed(p_task_id) then
-        raise exception 'task status changed concurrently' using errcode = '40001';
-      end if;
-      if exists (select 1 from public.task_checklists c
-                 join public.task_checklist_items i on i.checklist_id = c.id
-                 where c.task_id = p_task_id and not i.is_completed) then
-        raise exception 'posting checklist is incomplete' using errcode = '23514';
-      end if;
-      v_allowed := true;
-    else -- DONE -> REVISION
-      v_review_task_id := public.content_os_find_revision_review(p_task_id, p_actor_id);
-      if v_review_task_id is null then
-        raise exception 'only the source Blog''s Head Review may request this revision' using errcode = '42501';
-      end if;
-      v_allowed := true;
-    end if;
-  end if;
-end if;
-```
-
-3. **Remove** the broad Sprint 9A rule ("DONE → REVISION for any Content OS
-   task by creator or Head") — that is the defect.
-4. Record `v_review_task_id` in the new path's event metadata (the
-   reference appends `|| jsonb_build_object('reviewTaskId', …)` only when it
-   is set, so every legacy event's metadata is byte-identical).
-5. Head Review completion while its Blog is in REVISION is refused by the
-   `content_os_completion_allowed` check above; a Head Review is not
-   review-required, so it completes by the direct path.
-6. Keep SECURITY INVOKER, `search_path = ''`, signature and EXECUTE grants.
+1. Legacy matrix and legacy event behaviour unchanged for every task.
+2. The Content OS completion gate (`content_os_completion_allowed`) also
+   constrains legacy paths into DONE (e.g. `REVIEW → DONE`), so a Head Review
+   cannot bypass the source-Blog gate by entering REVIEW first.
+3. Only when the legacy matrix refuses, and only for a Content OS task:
+   - `IN_PROGRESS/REVISION → DONE` for a non-review-required task, by its
+     assignee, completion gate + posting-checklist rule enforced;
+   - Blog `DONE → REVISION` only via `content_os_find_revision_review`
+     (the Blog's own open Head Review; its assignee or the active Head);
+     the review row is locked, must be `IN_PROGRESS`, and is set
+     **`BLOCKED`** (reason `Waiting for source Blog revision`) **in the same
+     transaction**;
+   - Blog `REVISION → DONE` recovers the review id from the latest
+     `REVISION_REQUESTED` event's `metadata.reviewTaskId`, locks it, requires
+     it `BLOCKED` with valid provenance, and sets it **`ASSIGNED`** in the
+     same transaction. Anything else → `40001`, nothing half-applied.
+4. Events: the Blog's events carry `reviewTaskId`; the review gets
+   `STATUS_CHANGED` + `TASK_BLOCKED` / `TASK_UNBLOCKED` with metadata
+   `{sourceTaskId, coupledContentOsTransition: true, reason?}`.
+5. The outer IF tests only `to_regprocedure`; all `content_os_*` calls are
+   nested, so the function is safe before the Content OS schema exists and
+   after its rollback (proven, dry-run section 5b).
 
 Production order: A1 → A4 → Content OS drafts `00…06` → A2/A3 → wiring.
-Thanks to the `to_regprocedure` guard the function is still safe if applied
-earlier (legacy behaviour until the functions exist) and after a Content OS
-rollback (the functions are dropped; legacy transitions keep working) —
-both proven in the dry-run (section 5b).
 
-Required Task Bot tests (dry-run): the nine scenarios in
-`supabase/content-os-drafts/dry-run/25_transition_contract_tests.sql`
-expressed as transitions — Blog `DONE → REVISION` succeeds only for the
-Head Review's assignee or the Head; refused for Research / SEO / a Blog
-without its own Head Review / the Blog author / an unrelated member / an
-inactive assignee / a BLOCKED or DONE review; `REVISION → DONE` by the Blog
-assignee; Head Review `IN_PROGRESS → DONE` refused while its Blog is in
-REVISION; legacy 42-transition matrix unchanged.
+The superseded Sprint 9B reference body
+(`docs/persistence/reference/transition_task_with_events.sprint9b.sql`,
+non-coupled) was removed in Sprint 9C; it is in git history only.
 
-## 4. Persistence records for the vertical slice
+## 4. Persisted lifecycle of the vertical slice
 
-| Step | Task Bot (authoritative) | Content OS rows |
+| Step | Task Bot (authoritative, one RPC call) | Content OS rows |
 |---|---|---|
 | Blog created | `content_os_create_task_idempotent('CREATE_TASK', 'blog:<requestKey>', hash, …)` → task IN_PROGRESS | `content_blogs` (deterministic id from the request key), `content_task_runtime` (pinned BLOG version, `source_task_id` = Research task if any), links PRIMARY BLOG + RELATED KNOWLEDGE_NODE |
-| Blog completed | `IN_PROGRESS → DONE` (assignee) | — |
-| Head Review opened (once per Blog task) | `content_os_create_task_idempotent('CREATE_TASK', 'head-review:<blogTaskId>', …)` | runtime (pinned HEAD_REVIEW version, `source_task_id` = Blog task), links PRIMARY BLOG (same entity) + RELATED KNOWLEDGE_NODE |
-| Revision requested | Blog `DONE → REVISION` (reviewer) | Head Review `field_values` `review-decision = "Revision requested"`, `review-note` |
-| Blog corrected | Blog `REVISION → DONE` (assignee); Head Review found by lineage + code, **reused** | — |
-| Approved | Head Review `IN_PROGRESS → DONE` (reviewer, only while Blog DONE) | `review-decision = "Approved"` |
+| Blog completed | Blog `IN_PROGRESS → DONE` (assignee) | — |
+| Head Review opened (once per Blog task) | `content_os_create_task_idempotent('CREATE_TASK', 'head-review:<blogTaskId>', …)` → IN_PROGRESS | runtime (pinned HEAD_REVIEW version, `source_task_id` = Blog task), links PRIMARY BLOG (same entity) + RELATED KNOWLEDGE_NODE |
+| Revision requested | Blog `DONE → REVISION` (reviewer or Head) **and atomically** Head Review `IN_PROGRESS → BLOCKED`; `task_revisions` row | Head Review `field_values`: `review-decision = "Revision requested"`, `review-note` |
+| Blog resubmitted | Blog `REVISION → DONE` (assignee) **and atomically** the SAME Head Review `BLOCKED → ASSIGNED` | `review-decision` cleared (`null`); note kept |
+| Reviewer picks it up | Head Review `ASSIGNED → IN_PROGRESS` (legacy ACCEPT, by the review assignee) — done by `approve`/`requestRevision` | — |
+| Approved | Head Review `IN_PROGRESS → DONE` (review assignee, only while the Blog is DONE) | `review-decision = "Approved"` (+ note) |
 
-Waiting model: the Head Review **stays IN_PROGRESS** while its Blog is in
-REVISION (waiting is derived from the Blog's status). This avoids a
-cross-actor `BLOCKED → IN_PROGRESS` on someone else's task and the BLOCKED
-reason requirement. The local session UI (Sprint 7.1) still parks the
-reviewer as BLOCKED; that is session-only demo behaviour and is mapped, not
-persisted.
+How BLOCKED → ASSIGNED is preserved: Content OS never moves the Head Review
+for the revision/resubmission steps — it issues exactly **one** transition
+on the Blog, and the Task Bot moves the coupled review in the same
+transaction. So the review can never be left `IN_PROGRESS` while its Blog is
+in REVISION, nor `BLOCKED` after the Blog is DONE again. The Sprint 9B
+"stays IN_PROGRESS while waiting" model is withdrawn. Decision rules
+(`lib/persistence/blog-review-flow.ts`): a decision is made by the active
+Head Review assignee or the active Head; only the assignee completes the
+review (the Task Bot's direct-DONE rule); the Blog author cannot decide.
 
-Implementation: `lib/persistence/` (ports, PostgREST adapter, in-memory
-adapter, `BlogReviewFlow`); fail-closed by default (`getContentOsPersistence()`).
+## 5. Orchestration, retries and reconciliation
 
-## 5. Evidence
+Service: `BlogReviewFlow` (`startBlog`, `completeBlog`, `requestRevision`,
+`approve`, `reconcile`). Each operation reads current Task Bot state and
+performs only what is still missing, so **every operation is safely
+retryable** after any partial failure:
+
+| Partial failure | Converges by |
+|---|---|
+| Blog transitioned, then a Content OS write (runtime/links) fails | retry `completeBlog`: Blog already DONE → no transition; Head Review creation returns the same task (idempotency key); runtime/links upserts are no-ops when present |
+| Head Review creation response lost after the Task Bot created it | retry: `head-review:<blogTaskId>` with a hash over `{kind, blogTaskId, blogId}` only → same task even if the retry names another reviewer/deadline |
+| Revision request retried | Blog already REVISION and review BLOCKED → treated as applied; only the decision fields are (re)aligned |
+| Blog resubmitted twice | second call sees DONE/ASSIGNED → no transition; Task Bot itself also returns the task unchanged for a same-status transition |
+| Link insert ignore-duplicates conflict | read-back requires each requested link to exist exactly; a swallowed PRIMARY conflict surfaces as `PersistenceConflictError`; nothing is created twice |
+| Head Review state/decision write fails after the Blog transition | Task Bot state is already correct (atomic coupling); `reconcile(blogTaskId)` or any retry re-derives the decision fields |
+
+`reconcile(blogTaskId)` is the single explicit reconciliation mechanism: it
+derives the expected decision from Task Bot state (`DONE` → Approved;
+`BLOCKED` + Blog `REVISION` → Revision requested; otherwise cleared), writes
+only when it differs, and reports a missing Head Review for a DONE Blog as
+an action (`HEAD_REVIEW_MISSING`) instead of creating one. Idempotent.
+
+## 6. Server / client boundary
+
+- `app/api/content-os/blog-review/route.ts` (POST, dynamic, `no-store`) is
+  the only place that reads env (`resolveContentOsPersistenceConfig(process.env)`).
+  Everything in `lib/persistence/` is env-free and Supabase-library-free
+  (plain `fetch` injected).
+- Config is explicit and fail-closed: disabled unless
+  `CONTENT_OS_PERSISTENCE_ENABLED=true` with `CONTENT_OS_SUPABASE_URL`
+  (https), `CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY`,
+  `CONTENT_OS_IDENTITY_TENANT_KEY`; partial config → 503, nothing called.
+  None of these is `NEXT_PUBLIC_*`; the client bundle has no reference to
+  them (checked after build; test `blog-review-recovery`).
+- The **actor is never taken from the request body** (strict schema rejects
+  unknown keys). It is the platform-authenticated SIWC subject resolved via
+  `external_identity_links` (`OPENAI_SIWC`, tenant key) to exactly one
+  ACTIVE link of an ACTIVE `public.users` row; otherwise 401/403.
+- Writes happen only server-side; the demo/session path (no persistence)
+  is unchanged and remains the default. No component imports
+  `lib/persistence`.
+- Error mapping: rule/conflict → 409, Task Bot `42501` → 403, `40001` /
+  `23505` / `23514` → 409, unexpected → 500 without details.
+
+## 7. Concurrency (`field_values` read-modify-write)
+
+`mergeFieldValues` reads the runtime row and PATCHes the merged JSON, so two
+concurrent merges on the same Head Review can lose one write. In this slice
+that cannot cause a wrong transition: the decision fields are
+informational and **never gate** anything — every gate uses Task Bot status,
+events and provenance under row locks. Writers are serialized by the Task
+Bot transitions they follow, and the only remaining race (a delayed write
+from an earlier step landing after a later step's write) produces a stale
+display value that `reconcile` re-derives. The revision note is also
+persisted authoritatively in `task_revisions.reason` and the event metadata.
+Decision: no fix in this slice; documented. A general fix (a
+`jsonb ||`-merging RPC or optimistic `updated_at` check) is deferred until a
+field becomes authoritative.
+
+## 8. Deferred / limitations
+
+- Live integration not performed: no Supabase apply, no deploy, no real
+  credentials; proven only in-process (memory adapter simulating `a9ed78a`)
+  and on disposable PostgreSQL 17.
+- `external_identity_links` (draft 05) and its population are Task Bot /
+  owner decisions (S8/S9); until linked, every request is 403.
+- The posting checklist: Content OS never emits `#posting`
+  (`neutralizePostingTag`); `startBlog` accepts only
+  `postingChecklist: "NONE"` — a typed extension point for an explicit Task
+  Bot creation parameter, not supported by today's RPC.
+- No UI is wired to the route yet; notifications for the coupled review
+  events are the Task Bot's.
+- Other Head Review consumers (SEO/Angle/PC tasks) and the generic
+  `field_values` concurrency fix are out of scope.
+
+## 9. Evidence
 
 `supabase/content-os-drafts/dry-run/run-dry-run.sh` on disposable
 PostgreSQL 17.11 (`DRY_RUN_EVIDENCE.log`): Sprint 8 contract suite +
-`25_transition_contract_tests.sql` (9 scenarios) pass on two fresh
-databases; the reference Task Bot function passes
-`40_reference_transition_tests.sql` as real transitions (section 5b); Task Bot fingerprint unchanged;
-rollback removes all Content OS objects incl. the 06 functions. The Sprint
-9A Task Bot harness (read-only, unmodified) also passes with migration 06
-applied. Unit tests: `tests/persistence-bridge.test.mjs`.
+`25_transition_contract_tests.sql` pass on two fresh databases; Codex's final
+function (read via `git show`, md5 recorded in the log) passes
+`40_task_bot_transition_tests.sql` as real transitions, including the
+coupled `BLOCKED`/`ASSIGNED` lifecycle, the REVIEW→DONE gate and
+all-or-nothing resubmission (section 5b); Task Bot fingerprint unchanged;
+privilege stripping verified; rollback removes all Content OS objects incl.
+the 06 functions. Unit tests: `tests/blog-review-lineage.test.mjs`,
+`tests/blog-review-recovery.test.mjs`, `tests/persistence-adapter.test.mjs`.

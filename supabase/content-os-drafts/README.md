@@ -15,8 +15,11 @@ files exist only to be dry-run on a disposable local PostgreSQL 17.
 - `dry-run/25_transition_contract_tests.sql` — Sprint 9B transition contract
   (migration 06): Blog / Head Review provenance, reviewer authorization,
   pinned review-required, fail-safe malformed config.
-- `dry-run/40_reference_transition_tests.sql` — proves the reference Task Bot
-  function in `docs/persistence/reference/` as real transitions.
+- `dry-run/40_task_bot_transition_tests.sql` — proves the FINAL Task Bot
+  transition function (Codex `codex/sprint-9b-hardening`, read via
+  `git show`, never modified; ref overridable with `TB_FINAL_REF`) as real
+  transitions, incl. the coupled Head Review `BLOCKED → ASSIGNED` lifecycle.
+  Section 5b prints `SKIPPED` if that ref is not available.
 - `dry-run/DRY_RUN_EVIDENCE.log` — output of the last run.
 
 Why they are not under `supabase/migrations/`: this repo has no Supabase
