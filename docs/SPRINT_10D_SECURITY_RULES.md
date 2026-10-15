@@ -35,8 +35,10 @@ body field can name an actor or creator.
 
 - The reviewed Blog's **author** (its current assignee) is never the Head
   Review's reviewer, creator, or decider — Head included.
-- The Head Review is created under the **Blog's commissioner** (the Blog
-  task's creator), never the author who completes the Blog.
+- The Task Bot's completion RPC records the completing author as the Head
+  Review's `creator_id`. That grants nothing: workflow tasks carry no
+  creator rights (Task Bot `task_uses_manual_creator_rights`), and the author
+  is refused every decision on the review.
 - Nobody (Head included) can directly reassign a Head Review to the Blog's
   author, approve a reassignment request that would, or reassign a Blog to
   its own reviewer (`409 WORKFLOW_INDEPENDENCE`).
@@ -45,17 +47,16 @@ body field can name an actor or creator.
 
 ## 3. Blog completion invariant
 
-`Blog completion ⇒ exactly one Head Review exists.` Content OS has exactly one
-path that moves a Blog to DONE: `BlogReviewFlow.completeBlog` (via
-`POST /api/content-os/blog-review`). The generic lifecycle path is refused
-for workflow tasks (`409 WORKFLOW_TASK`). Before the Blog moves, the flow
-validates the reviewer (not the author, active), so a refused review creation
-can no longer leave a DONE Blog without its review. Retries return the same
-Blog and the same Head Review (idempotency key `head-review:<blogTaskId>`).
-The approved lifecycle (Blog DONE→REVISION with the review BLOCKED; Blog
-REVISION→DONE with the review ASSIGNED; pick-up; approval) is unchanged. If
-the Task Bot later provides a dedicated atomic completion RPC, Content OS
-switches to it without keeping a fallback.
+`Blog completion ⇒ exactly one Head Review exists.` The only path is the
+Task Bot's atomic `content_os_complete_blog_with_head_review` RPC, which
+Content OS calls from `BlogReviewFlow.completeBlog` (Sprint 10E): in one
+transaction it creates or reuses the Blog's single Head Review and completes
+the Blog, or resubmits it and resumes that same review. The Task Bot refuses
+any generic `transition(..., 'DONE')` of a Content OS Blog, and Content OS's
+generic team-task API refuses all generic lifecycle on workflow tasks. Before
+calling, Content OS also refuses a reviewer who is the Blog's author (Head
+included — stricter than the Task Bot, which exempts Head) or inactive.
+Retries return the same Blog and the same review (key `head-review:<blogTaskId>`).
 
 ## 4. Telegram login: matching code and abuse protection
 
@@ -78,7 +79,12 @@ switches to it without keeping a fallback.
   Rate Limiting binding (`LOGIN_START_LIMITER`, 5 per 60 s) keyed on SHA-256
   of Cloudflare's `CF-Connecting-IP` — the same hash the Task Bot's own limit
   (5 per 15 min, at most 3 open challenges) uses; nothing the browser sends
-  selects either bucket. A missing binding fails closed (503). Rate-limited responses are a
+  selects either bucket.
+- **Known gap (Sprint 10E audit, MEDIUM):** the Task Bot contract asks for
+  `p_rate_key_hash` = HMAC over the client key with a server-only pepper;
+  Content OS currently sends plain SHA-256 of the IP. Functionally correct,
+  but an unpeppered hash of an IPv4 address is reversible from the stored
+  value (retained up to 7 days). To be fixed by adding a server-only pepper. A missing binding fails closed (503). Rate-limited responses are a
   neutral `429 LOGIN_RATE_LIMITED` with `Retry-After`; the UI waits and never
   retries automatically.
 - Expired, cancelled, consumed and unavailable challenges stop polling and

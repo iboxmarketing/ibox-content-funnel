@@ -13,7 +13,7 @@
  */
 import type { ContentEntityType } from "../content-entity";
 import type { FieldValue } from "../task-instance";
-import { PersistenceConflictError, type ContentOsStore, type OperationalTaskGateway } from "./ports";
+import { PersistenceConflictError, type CompleteBlogWithHeadReviewInput, type CompleteBlogWithHeadReviewResult, type ContentOsStore, type OperationalTaskGateway } from "./ports";
 import type {
   BlogRecord,
   CreateOperationalTaskInput,
@@ -282,6 +282,26 @@ export class SupabaseOperationalTaskGateway implements OperationalTaskGateway {
   async getActor(userId: string): Promise<OperationalActor | null> {
     const [row] = await this.db.select("users", "id,role,is_active", { id: eq(userId) });
     return row ? { id: row.id as string, role: row.role as string, isActive: row.is_active as boolean } : null;
+  }
+
+  async completeBlogWithHeadReview(input: CompleteBlogWithHeadReviewInput): Promise<CompleteBlogWithHeadReviewResult> {
+    const result = await this.db.rpc("content_os_complete_blog_with_head_review", {
+      p_blog_task_id: input.blogTaskId,
+      p_actor_id: input.actorId,
+      p_reviewer_id: input.reviewerId,
+      p_review_deadline: input.reviewDeadline,
+      p_review_title: input.reviewTitle,
+      p_review_request_hash: input.reviewRequestHash,
+    });
+    const row = (Array.isArray(result) ? result[0] : result) as Row | undefined;
+    if (!row?.blog_task_id || !row.head_review_task_id) throw new PersistenceConflictError("content_os_complete_blog_with_head_review returned no result");
+    return {
+      blogTaskId: row.blog_task_id as string,
+      blogStatus: row.blog_status as TaskStatus,
+      headReviewTaskId: row.head_review_task_id as string,
+      headReviewStatus: row.head_review_status as TaskStatus,
+      headReviewCreated: row.head_review_created === true,
+    };
   }
 
   async transition(taskId: string, actorId: string, newStatus: TaskStatus, reason?: string): Promise<OperationalTask> {

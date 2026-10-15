@@ -52,11 +52,37 @@ export interface ContentOsStore {
   linksForEntity(entityType: ContentEntityType, entityId: string): Promise<readonly TaskLinkRecord[]>;
 }
 
+/** Input of the Task Bot's atomic `content_os_complete_blog_with_head_review` RPC (Sprint 10D). */
+export interface CompleteBlogWithHeadReviewInput {
+  readonly blogTaskId: string;
+  readonly actorId: string;
+  readonly reviewerId: string;
+  readonly reviewDeadline: string;
+  readonly reviewTitle: string;
+  /** SHA-256 hex of the canonical {kind: HEAD_REVIEW, blogTaskId, blogId} request. */
+  readonly reviewRequestHash: string;
+}
+
+export interface CompleteBlogWithHeadReviewResult {
+  readonly blogTaskId: string;
+  readonly blogStatus: TaskStatus;
+  readonly headReviewTaskId: string;
+  readonly headReviewStatus: TaskStatus;
+  readonly headReviewCreated: boolean;
+}
+
 export interface OperationalTaskGateway {
   createTaskIdempotent(input: CreateOperationalTaskInput): Promise<{ readonly taskId: string; readonly created: boolean }>;
   getTask(taskId: string): Promise<OperationalTask | null>;
   getActor(userId: string): Promise<OperationalActor | null>;
+  /** Generic lifecycle. The Task Bot refuses it for a Content OS BLOG moving to DONE. */
   transition(taskId: string, actorId: string, newStatus: TaskStatus, reason?: string): Promise<OperationalTask>;
+  /**
+   * The ONLY Blog completion path: in one Task Bot transaction it creates or reuses the
+   * Blog's single Head Review and completes the Blog (or resubmits it and resumes that
+   * same review). Retries return the same review.
+   */
+  completeBlogWithHeadReview(input: CompleteBlogWithHeadReviewInput): Promise<CompleteBlogWithHeadReviewResult>;
 }
 
 export class PersistenceNotConfiguredError extends Error {

@@ -121,7 +121,8 @@ test("3. unrelated Content OS DONE tasks cannot be sent to REVISION (Research, S
   const research = await attach(w, w.versions.research, { status: "DONE", primary: { entityType: "KNOWLEDGE_NODE", entityId: w.node.id } });
   const seo = await attach(w, w.versions.seo, { source: blogTaskId, status: "DONE", primary: { entityType: "BLOG", entityId: blogId } });
   const lonelyBlog = await w.flow.startBlog({ requestKey: "req-lonely", knowledgeNodeId: w.node.id, blogTitle: "Blog B", creatorId: HEAD, assigneeId: AUTHOR, deadline: DEADLINE });
-  await w.tasks.transition(lonelyBlog.blogTaskId, AUTHOR, "DONE");
+  // Legacy data only: since Sprint 10D no path can produce a DONE Blog without its Head Review.
+  w.tasks.tasks.set(lonelyBlog.blogTaskId, { ...w.tasks.tasks.get(lonelyBlog.blogTaskId), status: "DONE" });
   for (const target of [research, seo, lonelyBlog.blogTaskId]) {
     await assert.rejects(() => w.tasks.transition(target, HEAD, "REVISION", "x"), /only the source Blog's Head Review/, target);
     assert.equal((await w.tasks.getTask(target)).status, "DONE");
@@ -214,7 +215,8 @@ test("8. pinned config survives newer Task Type versions", async () => {
   const newBlog = await w.flow.startBlog({ requestKey: "req-pin-2", knowledgeNodeId: w.node.id, blogTitle: "On v2", creatorId: HEAD, assigneeId: AUTHOR, deadline: DEADLINE });
   assert.equal((await w.store.getRuntime(newBlog.blogTaskId)).taskTypeVersionId, v2.id);
   await assert.rejects(() => w.flow.completeBlog({ blogTaskId: newBlog.blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE }), /review-required/);
-  await assert.rejects(() => w.tasks.transition(newBlog.blogTaskId, AUTHOR, "DONE"), /changed concurrently/, "the gateway enforces REVIEW too");
+  await assert.rejects(() => w.tasks.transition(newBlog.blogTaskId, AUTHOR, "DONE"), /dedicated Head Review RPC/, "generic Blog DONE is always refused");
+  await assert.rejects(() => w.tasks.completeBlogWithHeadReview({ blogTaskId: newBlog.blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE, reviewTitle: "HR", reviewRequestHash: "a".repeat(64) }), /review-required/, "the gateway enforces REVIEW too");
   assert.throws(() => w.store.addTaskTypeVersion("BLOG", 2, false), /immutable/);
 });
 
@@ -224,7 +226,8 @@ test("9. malformed review config on the pinned workflow step fails safe (direct 
   const taskId = await attach(w, w.versions.blog, { primary: null });
   w.store.runtimes.set(taskId, { ...(await w.store.getRuntime(taskId)), workflowRunId: "run-1", workflowTemplateVersionId: "wf-version-1", workflowStepId: step.id });
   assert.equal((await contract.loadContentOsTaskFacts(taskId, w.store, w.tasks)).requiresReview, true);
-  await assert.rejects(() => w.tasks.transition(taskId, AUTHOR, "DONE"), /changed concurrently/);
+  await assert.rejects(() => w.tasks.transition(taskId, AUTHOR, "DONE"), /dedicated Head Review RPC/);
+  await assert.rejects(() => w.tasks.completeBlogWithHeadReview({ blogTaskId: taskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE, reviewTitle: "HR", reviewRequestHash: "a".repeat(64) }), /review-required/);
   assert.equal((await w.tasks.transition(taskId, AUTHOR, "REVIEW")).status, "REVIEW", "the REVIEW path stays open");
 });
 

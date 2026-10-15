@@ -186,3 +186,16 @@ test("boundaries: components never import persistence; persistence never imports
     assert.doesNotMatch(source, /\.title\s*===|\.name\s*===/, `${file} must not branch on titles or display names`);
   }
 });
+
+test("10E: Supabase gateway calls content_os_complete_blog_with_head_review with the exact Task Bot argument names and maps its row", async () => {
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, body: JSON.parse(init.body) });
+    return { ok: true, status: 200, text: async () => JSON.stringify([{ blog_task_id: "b", blog_status: "DONE", head_review_task_id: "r", head_review_status: "IN_PROGRESS", head_review_created: true }]) };
+  };
+  const gateway = new SupabaseOperationalTaskGateway(new PostgrestClient({ baseUrl: "https://example.supabase.co", serviceRoleKey: "test-key", fetch }));
+  const result = await gateway.completeBlogWithHeadReview({ blogTaskId: "b", actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE, reviewTitle: "Head Review — B", reviewRequestHash: "f".repeat(64) });
+  assert.equal(calls[0].url, "https://example.supabase.co/rest/v1/rpc/content_os_complete_blog_with_head_review");
+  assert.deepEqual(calls[0].body, { p_blog_task_id: "b", p_actor_id: AUTHOR, p_reviewer_id: REVIEWER, p_review_deadline: DEADLINE, p_review_title: "Head Review — B", p_review_request_hash: "f".repeat(64) });
+  assert.deepEqual(result, { blogTaskId: "b", blogStatus: "DONE", headReviewTaskId: "r", headReviewStatus: "IN_PROGRESS", headReviewCreated: true });
+});

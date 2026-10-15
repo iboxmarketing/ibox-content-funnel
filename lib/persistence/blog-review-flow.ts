@@ -38,7 +38,7 @@
  */
 import type { ContentOsStore, OperationalTaskGateway } from "./ports";
 import { PersistenceConflictError } from "./ports";
-import type { OperationalActor, TaskLinkRecord, TaskStatus } from "./records";
+import type { OperationalActor, TaskStatus } from "./records";
 import { completionAllowed, loadContentOsTaskFacts, revisionAllowed, type ContentOsTaskFacts } from "./transition-contract";
 import { BLOG_TASK_TYPE_CODE, HEAD_REVIEW_TASK_TYPE_CODE } from "./task-type-codes";
 import { deterministicUuid, idempotencyKeys, neutralizePostingTag, requestHash } from "./idempotency";
@@ -142,29 +142,42 @@ export class BlogReviewFlow {
    * Head Review exists and aligns its decision fields.
    */
   async completeBlog(input: CompleteBlogInput): Promise<BlogReviewState & { headReviewCreated: boolean }> {
-    let blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
+    const blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
     if (blog.requiresReview) throw new ContentOsRuleError("this Blog task is review-required; it completes through REVIEW, not directly");
-    if (blog.task.status === "IN_PROGRESS" || blog.task.status === "REVISION") {
-      if (blog.task.assigneeId !== input.actorId) throw new ContentOsRuleError("only the Blog assignee completes the Blog");
-      // Invariant "Blog DONE => exactly one Head Review": validate the reviewer BEFORE the Blog
-      // moves, so a refused review creation can never leave a DONE Blog without its review.
-      if (!(await this.findHeadReview(blog.task.id))) await this.assertReviewer(blog, input.reviewerId);
-      if (blog.task.status === "REVISION") {
-        // The Task Bot restores the parked review only if it is still BLOCKED.
-        const parked = await this.findHeadReview(blog.task.id);
-        const parkedTask = parked ? await this.tasks.getTask(parked) : null;
-        if (parkedTask?.status !== "BLOCKED") {
-          throw new ContentOsRuleError(`the Head Review is not waiting for this Blog (${parkedTask?.status ?? "missing"}); it must be BLOCKED before the Blog is resubmitted`);
-        }
-      }
-      await this.tasks.transition(blog.task.id, input.actorId, "DONE");
-      blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
-    } else if (blog.task.status !== "DONE") {
+    const existing = await this.findHeadReview(blog.task.id);
+    if (blog.task.status === "DONE" && existing) {
+      // Already complete with its review (retry / lost response): nothing to send.
+      const state = await this.alignDecision(blog.task.id, existing);
+      return { ...state, headReviewCreated: false };
+    }
+    if (!["IN_PROGRESS", "REVISION", "DONE"].includes(blog.task.status)) {
       throw new ContentOsRuleError(`a ${blog.task.status} Blog cannot be completed`);
     }
-    const { headReviewTaskId, headReviewCreated } = await this.ensureHeadReview(blog, input);
-    const state = await this.alignDecision(blog.task.id, headReviewTaskId);
-    return { ...state, headReviewCreated };
+    if (blog.task.assigneeId !== input.actorId) throw new ContentOsRuleError("only the Blog assignee completes the Blog");
+    // Content OS is stricter than the Task Bot here: the author never reviews their own Blog,
+    // Head included (owner decision 2).
+    if (!existing) await this.assertReviewer(blog, input.reviewerId);
+    if (blog.task.status === "REVISION") {
+      const parked = existing ? await this.tasks.getTask(existing) : null;
+      if (parked?.status !== "BLOCKED") {
+        throw new ContentOsRuleError(`the Head Review is not waiting for this Blog (${parked?.status ?? "missing"}); it must be BLOCKED before the Blog is resubmitted`);
+      }
+    }
+    const blogLink = blog.primaryLink;
+    if (blogLink?.entityType !== "BLOG") throw new ContentOsRuleError("Blog task has no PRIMARY Blog entity");
+    const blogRecord = await this.store.getBlog(blogLink.entityId);
+    // One Task Bot transaction: Blog DONE + exactly one Head Review (created, reused, or resumed).
+    const result = await this.tasks.completeBlogWithHeadReview({
+      blogTaskId: blog.task.id,
+      actorId: input.actorId,
+      reviewerId: input.reviewerId,
+      reviewDeadline: input.reviewDeadline,
+      reviewTitle: neutralizePostingTag(`Head Review — ${blogRecord?.title ?? "Blog"}`).slice(0, 200),
+      // Hash covers only the review's identity, so a retry with another reviewer/deadline returns the same review.
+      reviewRequestHash: requestHash({ kind: HEAD_REVIEW_TASK_TYPE_CODE, blogTaskId: blog.task.id, blogId: blogLink.entityId }),
+    });
+    const state = await this.alignDecision(blog.task.id, result.headReviewTaskId);
+    return { ...state, headReviewCreated: result.headReviewCreated };
   }
 
   /**
@@ -281,45 +294,6 @@ export class BlogReviewFlow {
       if (version?.code === HEAD_REVIEW_TASK_TYPE_CODE) return child.taskId;
     }
     return null;
-  }
-
-  private async ensureHeadReview(blog: ContentOsTaskFacts, input: CompleteBlogInput) {
-    const blogLink = blog.primaryLink;
-    if (blogLink?.entityType !== "BLOG") throw new ContentOsRuleError("Blog task has no PRIMARY Blog entity");
-
-    // Reuse: a Blog task has exactly one Head Review, found by stable code + lineage.
-    const existing = await this.findHeadReview(blog.task.id);
-    if (existing) return { headReviewTaskId: existing, headReviewCreated: false };
-
-    await this.assertReviewer(blog, input.reviewerId);
-    const version = await this.store.currentTaskTypeVersion(HEAD_REVIEW_TASK_TYPE_CODE);
-    if (!version) throw new ContentOsRuleError("no current HEAD_REVIEW Task Type version");
-    const blogRecord = await this.store.getBlog(blogLink.entityId);
-    const title = neutralizePostingTag(`Head Review — ${blogRecord?.title ?? "Blog"}`).slice(0, 200);
-    // The hash covers only the review's identity (which Blog task / entity),
-    // so a retry after a lost response returns the SAME task even if the
-    // caller now passes a different reviewer or deadline.
-    const { taskId, created } = await this.tasks.createTaskIdempotent({
-      purpose: "CREATE_TASK",
-      idempotencyKey: idempotencyKeys.headReviewTask(blog.task.id),
-      requestHash: requestHash({ kind: HEAD_REVIEW_TASK_TYPE_CODE, blogTaskId: blog.task.id, blogId: blogLink.entityId }),
-      // The Blog's commissioner, never the author (who completes the Blog).
-      creatorId: blog.task.creatorId,
-      assigneeId: input.reviewerId,
-      title,
-      description: "",
-      priority: "normal",
-      deadline: input.reviewDeadline,
-    });
-    await this.store.ensureRuntime({
-      taskId, taskTypeVersionId: version.id, workflowRunId: null, workflowTemplateVersionId: null, workflowStepId: null,
-      sourceTaskId: blog.task.id, outcome: null, skipReason: null, fieldValues: {},
-    });
-    const relatedNode = (await this.store.linksForTask(blog.task.id)).find((link) => link.entityType === "KNOWLEDGE_NODE");
-    const links: TaskLinkRecord[] = [{ taskId, entityType: "BLOG", entityId: blogLink.entityId, relation: "PRIMARY" }];
-    if (relatedNode) links.push({ taskId, entityType: "KNOWLEDGE_NODE", entityId: relatedNode.entityId, relation: "RELATED" });
-    await this.store.ensureLinks(links);
-    return { headReviewTaskId: taskId, headReviewCreated: created };
   }
 
   private async assertReviewer(blog: ContentOsTaskFacts, reviewerId: string): Promise<void> {

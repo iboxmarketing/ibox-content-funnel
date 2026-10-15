@@ -74,30 +74,31 @@ const counts = (w) => ({ tasks: w.tasks.tasks.size, blogs: w.store.blogs.size, r
 
 // --- failure / retry -----------------------------------------------------------
 
-test("F1: Blog transitioned DONE but the Content OS write for its Head Review fails -> retry converges, one Head Review", async () => {
+test("F1: Blog completion is ONE Task Bot transaction — a failed completion leaves no DONE Blog without its review; retry converges", async () => {
   const w = world();
   const { blogTaskId } = await start(w);
-  w.faults.push({ method: "ensureRuntime", when: "before" });
-  await assert.rejects(() => complete(w, blogTaskId), /injected before failure in ensureRuntime/);
-  assert.equal((await w.tasks.getTask(blogTaskId)).status, "DONE", "the Task Bot transition committed");
-  assert.equal(w.tasks.tasks.size, 2, "the Head Review task exists in the Task Bot, runtime not yet written");
-
+  w.faults.push({ method: "completeBlogWithHeadReview", when: "before" });
+  await assert.rejects(() => complete(w, blogTaskId), /injected before failure in completeBlogWithHeadReview/);
+  assert.equal((await w.tasks.getTask(blogTaskId)).status, "IN_PROGRESS", "nothing committed");
+  assert.equal(w.tasks.tasks.size, 1, "no orphan Head Review");
+  await assert.rejects(() => w.tasks.transition(blogTaskId, AUTHOR, "DONE"), /dedicated Head Review RPC/, "no generic fallback exists");
   const retried = await complete(w, blogTaskId);
-  assert.equal(retried.headReviewCreated, false, "the idempotent RPC returned the SAME Head Review");
+  assert.deepEqual([retried.blogStatus, retried.headReviewStatus, retried.headReviewCreated], ["DONE", "IN_PROGRESS", true]);
   assert.equal(w.tasks.tasks.size, 2);
   assert.equal((await w.store.getRuntime(retried.headReviewTaskId)).sourceTaskId, blogTaskId);
-  assert.equal(w.tasks.transitions.filter((t) => t.taskId === blogTaskId).length, 1, "the Blog was not transitioned again");
 });
 
-test("F4: the Head Review creation response is lost after the Task Bot created it -> retry (even with another reviewer) returns the SAME task", async () => {
+test("F4: completion response lost after the Task Bot committed Blog DONE + review -> retry (even with another reviewer) returns the SAME review, no second completion", async () => {
   const w = world();
   const { blogTaskId } = await start(w);
-  w.faults.push({ method: "createTaskIdempotent", when: "after", match: (input) => input.idempotencyKey.startsWith("head-review:") });
+  w.faults.push({ method: "completeBlogWithHeadReview", when: "after" });
   await assert.rejects(() => complete(w, blogTaskId), /injected after failure/);
+  assert.equal((await w.tasks.getTask(blogTaskId)).status, "DONE");
   const retried = await complete(w, blogTaskId, OTHER);
   assert.equal(retried.headReviewCreated, false);
   assert.equal(w.tasks.tasks.size, 2, "exactly one Blog task and one Head Review task");
   assert.equal(w.tasks.tasks.get(retried.headReviewTaskId).assigneeId, REVIEWER, "the first request's reviewer stands");
+  assert.equal(w.tasks.events.filter((e) => e.taskId === blogTaskId && e.eventType === "TASK_COMPLETED").length, 1, "no second completion event");
 });
 
 test("F2: revision request retried (after success and after a lost Task Bot response) applies exactly once", async () => {
@@ -180,14 +181,15 @@ test("the coupled Task Bot change is all-or-nothing: if the parked review is not
   await assert.rejects(() => complete(w, blogTaskId), /not waiting for this Blog \(IN_PROGRESS\)/);
   assert.equal(w.tasks.transitions.length, sent, "no transition was sent");
   // ...and the Task Bot itself would refuse it atomically anyway.
-  await assert.rejects(() => w.tasks.transition(blogTaskId, AUTHOR, "DONE"), /Head Review state changed concurrently/);
+  await assert.rejects(() => w.tasks.completeBlogWithHeadReview({ blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE, reviewTitle: "HR", reviewRequestHash: "a".repeat(64) }), /Head Review state changed concurrently/);
   assert.equal((await w.tasks.getTask(blogTaskId)).status, "REVISION", "nothing half-applied");
 });
 
 test("reconcile reports a missing Head Review without inventing one", async () => {
   const w = world();
   const { blogTaskId } = await start(w);
-  await w.tasks.transition(blogTaskId, AUTHOR, "DONE");
+  // Legacy data only (pre-10D): today no path can produce a DONE Blog without its review.
+  w.tasks.tasks.set(blogTaskId, { ...w.tasks.tasks.get(blogTaskId), status: "DONE" });
   const result = await w.flow.reconcile(blogTaskId);
   assert.equal(result.headReviewTaskId, null);
   assert.match(result.actions[0], /HEAD_REVIEW_MISSING/);
@@ -359,12 +361,13 @@ test("10D: the Blog author cannot name themselves reviewer — refused BEFORE th
   assert.equal((await complete(w, blogTaskId)).headReviewTaskId, done.headReviewTaskId, "retry: same Blog, same Head Review");
 });
 
-test("10D: the Head Review's creator is the Blog's commissioner, never its author", async () => {
+test("10D/10E: the Task Bot records the completing author as the review's creator — and that grants the author nothing", async () => {
   const w = world();
   const { blogTaskId } = await start(w);
-  const { headReviewTaskId } = await complete(w, blogTaskId);
-  assert.equal(w.tasks.tasks.get(headReviewTaskId).creatorId, HEAD);
-  assert.notEqual(w.tasks.tasks.get(headReviewTaskId).creatorId, AUTHOR);
+  const { headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId);
+  assert.equal(w.tasks.tasks.get(reviewTaskId).creatorId, AUTHOR, "content_os_complete_blog_with_head_review uses p_actor_id as creator");
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: AUTHOR, note: "x" }), /author cannot decide its Head Review/);
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: AUTHOR }), /author cannot decide its Head Review/);
 });
 
 test("10D: when Head writes the Blog, Head cannot decide its review (independence beats role)", async () => {
@@ -384,4 +387,23 @@ test("10D: Task Bot PT409 business conflicts map to HTTP 409, never 500", async 
     const res = await handleBlogReviewRequest({ body: { action: "complete", blogTaskId, reviewerId: REVIEWER, reviewDeadline: DEADLINE }, actorId: AUTHOR }, { flow });
     assert.deepEqual([res.status, res.body.code], [409, "CONFLICT"]);
   }
+});
+
+test("10E: the whole Blog lifecycle never sends a generic Blog DONE — completion and resubmission use only the dedicated RPC", async () => {
+  const w = world();
+  const sent = [];
+  const spy = new Proxy(w.tasks, { get(target, prop) {
+    const value = target[prop];
+    if (typeof value !== "function") return value;
+    return (...args) => { sent.push([prop, ...args]); return value.apply(target, args); };
+  } });
+  const flow = new BlogReviewFlow(w.store, spy);
+  const { blogTaskId } = await flow.startBlog({ requestKey: "spy", knowledgeNodeId: NODE, blogTitle: "Spy", creatorId: HEAD, assigneeId: AUTHOR, deadline: DEADLINE });
+  const done = await flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE });
+  await flow.requestRevision({ reviewTaskId: done.headReviewTaskId, actorId: REVIEWER, note: "Fix" });
+  await flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE });
+  await flow.approve({ reviewTaskId: done.headReviewTaskId, actorId: REVIEWER });
+  assert.equal(sent.filter(([m, id, , status]) => m === "transition" && id === blogTaskId && status === "DONE").length, 0, "no generic Blog DONE");
+  assert.equal(sent.filter(([m]) => m === "completeBlogWithHeadReview").length, 2, "first completion + resubmission");
+  assert.equal(sent.filter(([m, input]) => m === "createTaskIdempotent" && input.idempotencyKey.startsWith("head-review:")).length, 0, "Content OS never creates the review itself");
 });

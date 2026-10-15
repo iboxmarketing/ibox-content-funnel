@@ -8,7 +8,7 @@
  */
 import type { ContentEntityType } from "../content-entity";
 import type { FieldValue } from "../task-instance";
-import { PersistenceConflictError, type ContentOsStore, type OperationalTaskGateway } from "./ports";
+import { PersistenceConflictError, type CompleteBlogWithHeadReviewInput, type CompleteBlogWithHeadReviewResult, type ContentOsStore, type OperationalTaskGateway } from "./ports";
 import type {
   BlogRecord,
   CreateOperationalTaskInput,
@@ -22,10 +22,10 @@ import type {
   WorkflowStepRecord,
 } from "./records";
 import { LEGACY_TRANSITIONS, completionAllowed, isSourceBlogForHeadReview, loadContentOsTaskFacts, revisionAllowed } from "./transition-contract";
-import { BLOG_TASK_TYPE_CODE, TASK_TYPE_CODE_PATTERN, type TaskTypeCode } from "./task-type-codes";
+import { BLOG_TASK_TYPE_CODE, HEAD_REVIEW_TASK_TYPE_CODE, TASK_TYPE_CODE_PATTERN, type TaskTypeCode } from "./task-type-codes";
 
 export class TransitionRejectedError extends Error {
-  constructor(readonly sqlState: "40001" | "42501" | "22023", message: string) {
+  constructor(readonly sqlState: "40001" | "42501" | "22023" | "PT409" | "23514", message: string) {
     super(message);
     this.name = "TransitionRejectedError";
   }
@@ -207,6 +207,88 @@ export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
 
   async getActor(userId: string) { return this.actors.get(userId) ?? null; }
 
+  /**
+   * Simulates Task Bot `content_os_complete_blog_with_head_review` (a9ed78a + Sprint 10D
+   * migration 20261015151900): every check first, then one commit point.
+   */
+  async completeBlogWithHeadReview(input: CompleteBlogWithHeadReviewInput): Promise<CompleteBlogWithHeadReviewResult> {
+    const blog = this.tasks.get(input.blogTaskId);
+    if (!blog) throw new TransitionRejectedError("22023", "Blog task not found");
+    if (!this.actors.get(input.actorId)?.isActive || blog.assigneeId !== input.actorId) {
+      throw new TransitionRejectedError("42501", "only the active Blog assignee may complete the Blog");
+    }
+    const facts = await loadContentOsTaskFacts(blog.id, this.store, this);
+    if (facts?.code !== BLOG_TASK_TYPE_CODE) throw new TransitionRejectedError("22023", "task is not a Content OS Blog");
+    if (facts.requiresReview) throw new TransitionRejectedError("PT409", "review-required Blog cannot use the Head Review completion flow");
+    if (!["IN_PROGRESS", "REVISION", "DONE"].includes(blog.status)) throw new TransitionRejectedError("PT409", "Blog cannot be completed from its current status");
+
+    const reviews: string[] = [];
+    for (const runtime of await this.store.runtimesBySource(blog.id)) {
+      if ((await this.store.getTaskTypeVersion(runtime.taskTypeVersionId))?.code === HEAD_REVIEW_TASK_TYPE_CODE) reviews.push(runtime.taskId);
+    }
+    if (reviews.length > 1) throw new TransitionRejectedError("PT409", "Blog has more than one Head Review");
+    let reviewId: string | undefined = reviews[0];
+    if (!reviewId && blog.status === "REVISION") throw new TransitionRejectedError("PT409", "source Blog revision has no Head Review provenance");
+
+    let created = false;
+    if (!reviewId) {
+      if (Date.parse(input.reviewDeadline) <= Date.now()) throw new TransitionRejectedError("22023", "Head Review deadline must be in the future");
+      const title = input.reviewTitle.trim();
+      if (title.length < 1 || title.length > 200) throw new TransitionRejectedError("22023", "Head Review title must contain between 1 and 200 characters");
+      if (!/^[0-9a-f]{64}$/.test(input.reviewRequestHash)) throw new TransitionRejectedError("22023", "invalid Head Review request hash");
+      const reviewer = this.actors.get(input.reviewerId);
+      if (!reviewer?.isActive) throw new TransitionRejectedError("22023", "Head Review reviewer must be active");
+      if ([blog.creatorId, blog.assigneeId].includes(input.reviewerId) && reviewer.role !== "HEAD_OF_MARKETING") {
+        throw new TransitionRejectedError("42501", "a non-Head Blog author cannot review their own Blog");
+      }
+      const blogLink = facts.primaryLink;
+      if (blogLink?.entityType !== "BLOG") throw new TransitionRejectedError("PT409", "Blog task has no PRIMARY Blog entity");
+      const version = await this.store.currentTaskTypeVersion(HEAD_REVIEW_TASK_TYPE_CODE);
+      if (!version) throw new TransitionRejectedError("PT409", "no current HEAD_REVIEW Task Type version");
+      const creation = await this.createTaskIdempotent({
+        purpose: "CREATE_TASK", idempotencyKey: `head-review:${blog.id}`, requestHash: input.reviewRequestHash,
+        creatorId: input.actorId, assigneeId: input.reviewerId, title, description: "", priority: "normal", deadline: input.reviewDeadline,
+      });
+      reviewId = creation.taskId;
+      created = creation.created;
+      await this.store.ensureRuntime({ taskId: reviewId, taskTypeVersionId: version.id, workflowRunId: null, workflowTemplateVersionId: null, workflowStepId: null, sourceTaskId: blog.id, outcome: null, skipReason: null, fieldValues: {} });
+      const node = (await this.store.linksForTask(blog.id)).find((link) => link.entityType === "KNOWLEDGE_NODE");
+      await this.store.ensureLinks([
+        { taskId: reviewId, entityType: "BLOG", entityId: blogLink.entityId, relation: "PRIMARY" },
+        ...(node ? [{ taskId: reviewId, entityType: "KNOWLEDGE_NODE" as const, entityId: node.entityId, relation: "RELATED" as const }] : []),
+      ]);
+    }
+
+    const reviewTask = this.tasks.get(reviewId)!;
+    const reviewFacts = await loadContentOsTaskFacts(reviewId, this.store, this);
+    if (!reviewFacts || !isSourceBlogForHeadReview(facts, reviewFacts)) throw new TransitionRejectedError("PT409", "Head Review provenance is invalid or archived");
+    const meta = { reviewTaskId: reviewId, contentOsBlogCompletion: true };
+    if (blog.status === "IN_PROGRESS") {
+      if (!["ASSIGNED", "IN_PROGRESS"].includes(reviewTask.status)) throw new TransitionRejectedError("PT409", "existing Head Review is not active");
+      this.tasks.set(blog.id, { ...blog, status: "DONE", blockedReason: null });
+      this.transitions.push({ taskId: blog.id, actorId: input.actorId, from: "IN_PROGRESS", to: "DONE" });
+      this.events.push({ taskId: blog.id, actorId: input.actorId, eventType: "STATUS_CHANGED", metadata: meta }, { taskId: blog.id, actorId: input.actorId, eventType: "TASK_COMPLETED", metadata: meta });
+    } else if (blog.status === "REVISION") {
+      const lastRevision = [...this.events].reverse().find((e) => e.taskId === blog.id && e.eventType === "REVISION_REQUESTED" && typeof e.metadata.reviewTaskId === "string");
+      if (lastRevision?.metadata.reviewTaskId !== reviewId || reviewTask.status !== "BLOCKED") {
+        throw new TransitionRejectedError("PT409", "Head Review state changed concurrently");
+      }
+      this.tasks.set(blog.id, { ...blog, status: "DONE", blockedReason: null });
+      this.tasks.set(reviewId, { ...reviewTask, status: "ASSIGNED", blockedReason: null });
+      this.transitions.push({ taskId: blog.id, actorId: input.actorId, from: "REVISION", to: "DONE" }, { taskId: reviewId, actorId: input.actorId, from: "BLOCKED", to: "ASSIGNED" });
+      const reviewMeta = { sourceTaskId: blog.id, coupledContentOsTransition: true };
+      this.events.push(
+        { taskId: blog.id, actorId: input.actorId, eventType: "STATUS_CHANGED", metadata: meta },
+        { taskId: blog.id, actorId: input.actorId, eventType: "TASK_COMPLETED", metadata: meta },
+        { taskId: reviewId, actorId: input.actorId, eventType: "STATUS_CHANGED", metadata: reviewMeta },
+        { taskId: reviewId, actorId: input.actorId, eventType: "TASK_UNBLOCKED", metadata: reviewMeta },
+      );
+    }
+    const finalBlog = this.tasks.get(blog.id)!;
+    const finalReview = this.tasks.get(reviewId)!;
+    return { blogTaskId: blog.id, blogStatus: finalBlog.status, headReviewTaskId: reviewId, headReviewStatus: finalReview.status, headReviewCreated: created };
+  }
+
   async transition(taskId: string, actorId: string, newStatus: TaskStatus, reason?: string): Promise<OperationalTask> {
     const actor = this.actors.get(actorId);
     if (!actor?.isActive) throw new TransitionRejectedError("42501", "actor is not active");
@@ -218,6 +300,11 @@ export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
     let allowed = LEGACY_TRANSITIONS[from]?.includes(newStatus) ?? false;
     let review: { id: string; to: TaskStatus; blockedReason: string | null } | null = null;
     const facts = await loadContentOsTaskFacts(taskId, this.store, this);
+    // Task Bot Sprint 10D: a Content OS Blog reaches DONE only through
+    // content_os_complete_blog_with_head_review (completeBlogWithHeadReview).
+    if (facts?.code === BLOG_TASK_TYPE_CODE && newStatus === "DONE") {
+      throw new TransitionRejectedError("PT409", "Content OS Blog completion requires the dedicated Head Review RPC");
+    }
 
     if (allowed && newStatus === "DONE" && facts) {
       const source = facts.runtime.sourceTaskId ? await loadContentOsTaskFacts(facts.runtime.sourceTaskId, this.store, this) : null;
