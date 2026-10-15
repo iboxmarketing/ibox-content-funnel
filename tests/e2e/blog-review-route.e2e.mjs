@@ -20,6 +20,7 @@ const SERVICE = mintKey("service_role");
 const DEADLINE = "2026-10-20T13:00:00.000Z";
 let tls, gw, worker, authOnly;
 const sessions = {};
+let loginIp = 10;
 
 before(async () => {
   tls = makeLocalTls();
@@ -64,7 +65,15 @@ function approveChallenge(challengeId, telegramUserId) {
 async function login(telegramUserId, { base = worker.url } = {}) {
   const verifier = randomBytes(32).toString("base64url");
   const verifierHash = createHash("sha256").update(verifier).digest("hex");
-  const started = await request("/api/auth/telegram/start", { base, method: "POST", body: { verifierHash } });
+  // Local workerd has no Cloudflare edge to replace CF-Connecting-IP. Give
+  // each simulated browser its own edge-provided address so this suite tests
+  // auth behavior instead of intentionally exhausting one shared IP bucket.
+  const started = await request("/api/auth/telegram/start", {
+    base,
+    method: "POST",
+    body: { verifierHash },
+    headers: { "cf-connecting-ip": `198.51.100.${loginIp++}` },
+  });
   assert.equal(started.status, 200, started.text);
   assert.match(started.body.telegramDeepLink, new RegExp(`^https://t\\.me/ibox_e2e_bot\\?start=contentos_${started.body.challengeId}$`));
   const approved = approveChallenge(started.body.challengeId, telegramUserId);
@@ -279,7 +288,7 @@ test("response lost after commit (Blog creation, Head Review creation, revision,
   assert.deepEqual([started.status, started.body.created], [200, false]);
   const { blogTaskId } = started.body;
 
-  dropNext((e) => e.path === "/rest/v1/rpc/content_os_create_task_idempotent" && e.body.includes(`head-review:${blogTaskId}`));
+  dropNext((e) => e.path === "/rest/v1/rpc/content_os_complete_blog_with_head_review" && e.body.includes(blogTaskId));
   assert.equal((await complete(blogTaskId)).status, 503);
   assert.equal(status(blogTaskId), "DONE");
   const done = await complete(blogTaskId);
@@ -295,7 +304,7 @@ test("response lost after commit (Blog creation, Head Review creation, revision,
   assert.deepEqual([revised.status, revised.body.decision], [200, "Revision requested"]);
   assert.equal(Number(sql(`select count(*) from public.task_revisions where task_id = '${blogTaskId}'`)), 1);
 
-  dropNext((e) => e.path === "/rest/v1/rpc/transition_task_with_events" && e.body.includes('"p_new_status":"DONE"') && e.body.includes(blogTaskId));
+  dropNext((e) => e.path === "/rest/v1/rpc/content_os_complete_blog_with_head_review" && e.body.includes(blogTaskId));
   assert.equal((await complete(blogTaskId)).status, 503);
   assert.deepEqual([status(blogTaskId), status(reviewTaskId)], ["DONE", "ASSIGNED"]);
   const resubmitted = await complete(blogTaskId);

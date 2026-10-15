@@ -21,6 +21,7 @@ const DEADLINE_2 = "2030-11-05T09:00:00.000Z";
 const WEBHOOK_SECRET = "local_e2e_webhook_secret_123";
 let tls, gateway, taskBot, worker;
 const sessions = {};
+let loginIp = 10;
 let callbackUpdateId = 700_000;
 const flow = {};
 
@@ -92,7 +93,14 @@ function approveChallenge(challengeId, telegramUserId) {
 async function login(telegramUserId) {
   const verifier = randomBytes(32).toString("base64url");
   const verifierHash = createHash("sha256").update(verifier).digest("hex");
-  const started = await request("/api/auth/telegram/start", { method: "POST", body: { verifierHash } });
+  // Local workerd has no Cloudflare edge to replace CF-Connecting-IP. Give
+  // each simulated browser its own edge-provided address so this suite tests
+  // team behavior instead of intentionally exhausting one shared IP bucket.
+  const started = await request("/api/auth/telegram/start", {
+    method: "POST",
+    body: { verifierHash },
+    headers: { "cf-connecting-ip": `203.0.113.${loginIp++}` },
+  });
   assert.equal(started.status, 200, started.text);
   assert.equal(approveChallenge(started.body.challengeId, telegramUserId).status, "APPROVED");
   const completed = await request("/api/auth/telegram/complete", {
@@ -185,7 +193,7 @@ test("FLOW 1 — all active roles log in; manual task, all-task visibility, dead
   assert.equal(new Date(details.body.details.task.deadline).toISOString(), DEADLINE_2);
   assert.equal(details.body.details.deadlineRequests.find((entry) => entry.id === flow.deadlineRequestId).status, "APPROVED");
   assert.ok(sentTo(9006).length >= notificationCount + 2, "creation and approval both reached the Telegram dispatcher");
-  assert.equal(Number(sql(`select count(*) from public.task_notification_deliveries where status = 'SENT' and recipient_user_id = '${ids.operator}' and dedupe_key like 'DEADLINE_CHANGE_APPROVED:%'`)), 1);
+  assert.equal(Number(sql(`select count(*) from public.task_notification_deliveries d join public.task_events e on e.id = d.task_event_id where d.status = 'SENT' and d.recipient_user_id = '${ids.operator}' and e.task_id = '${flow.manualTaskId}' and d.event_type = 'DEADLINE_CHANGE_APPROVED'`)), 1);
 
   const eventCount = Number(sql(`select count(*) from public.task_events where task_id = '${flow.manualTaskId}' and event_type = 'DEADLINE_CHANGE_APPROVED'`));
   assert.equal((await telegramResolve("deadline", flow.deadlineRequestId)).status, 200);
@@ -211,7 +219,7 @@ test("FLOW 2 — Content OS request approved in Telegram; fresh UI read resolves
   const duplicate = await teamWrite(sessions.head, { action: "resolve-reassign", requestId, approve: true });
   assert.deepEqual([duplicate.status, duplicate.body.code], [409, "CONFLICT"]);
   assert.equal(Number(sql(`select count(*) from public.task_events where task_id = '${flow.manualTaskId}' and event_type = 'REASSIGN_APPROVED'`)), 1);
-  assert.equal(Number(sql(`select count(*) from public.task_notification_deliveries where status = 'SENT' and dedupe_key = 'REASSIGN_APPROVED:${requestId}'`)), 2);
+  assert.equal(Number(sql(`select count(*) from public.task_notification_deliveries d join public.task_events e on e.id = d.task_event_id where d.status = 'SENT' and e.task_id = '${flow.manualTaskId}' and d.event_type = 'REASSIGN_APPROVED'`)), 2);
 });
 
 test("FLOW 3 — creator changes deadline and assignee directly without a Head request", async () => {
