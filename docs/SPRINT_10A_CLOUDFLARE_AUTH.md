@@ -29,7 +29,7 @@ The raw verifier is kept temporarily in browser `sessionStorage` and removed aft
 
 ## Session and request boundary
 
-Cookie name: `content_os_session`.
+Cookie name: `__Host-content_os_session` in production (Sprint 10D; loopback development uses `content_os_session_dev`). See `docs/SPRINT_10D_SECURITY_RULES.md` §4–§5 for the matching code, rate limiting and cookie rules.
 
 - opaque random token only
 - `HttpOnly`

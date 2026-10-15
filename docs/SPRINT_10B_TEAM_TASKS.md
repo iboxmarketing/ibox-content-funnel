@@ -7,7 +7,7 @@ Content OS presents Task Bot's existing task model; it does not own a second tas
 1. Every active marketing user sees every non-archived marketing task.
 2. Every active marketing user sees all Content OS content through authenticated server reads.
 3. Every active marketing user can create tasks for any active team member.
-4. A creator directly edits, reassigns, and reschedules their own task.
+4. A creator directly edits, reassigns, and reschedules their own **manual** task. Content OS workflow tasks (Blog, Head Review) grant no creator rights and no generic lifecycle (Sprint 10D, `docs/SPRINT_10D_SECURITY_RULES.md`).
 5. An ordinary assignee requests reassignment or a deadline change unless they are also the creator.
 6. Head directly manages all tasks.
 7. Head resolves change requests.
@@ -18,7 +18,7 @@ Content OS presents Task Bot's existing task model; it does not own a second tas
 
 ## Trust and authorization boundaries
 
-The browser holds only the HttpOnly `content_os_session` cookie. `app/api/team/tasks/route.ts` revalidates that opaque session through Task Bot-owned authentication RPCs for every request. The current, active `public.users.id` becomes the actor subject of a server-only HMAC request to Task Bot with provider `CONTENT_OS_TELEGRAM_SESSION`.
+The browser holds only the HttpOnly `__Host-content_os_session` cookie (Sprint 10D). `app/api/team/tasks/route.ts` revalidates that opaque session through Task Bot-owned authentication RPCs for every request. The current, active `public.users.id` becomes the actor subject of a server-only HMAC request to Task Bot with provider `CONTENT_OS_TELEGRAM_SESSION`.
 
 Task Bot reloads that user, rechecks current active state and role, then applies its authoritative application and database permissions. Content OS helpers in `lib/team-task-permissions.ts` only control which UI actions are offered; a forged request cannot bypass Task Bot authorization. State-changing browser requests also pass the existing strict same-origin JSON check.
 
