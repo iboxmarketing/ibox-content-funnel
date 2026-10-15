@@ -76,7 +76,7 @@ async function login(telegramUserId, { base = worker.url } = {}) {
   const setCookie = completed.response.headers.get("set-cookie") ?? "";
   assert.match(setCookie, /; Path=\/; Max-Age=2592000; HttpOnly; SameSite=Strict/);
   const cookie = setCookie.split(";", 1)[0];
-  assert.match(cookie ?? "", /^content_os_session=[A-Za-z0-9_-]{43}$/);
+  assert.match(cookie ?? "", /^content_os_session_dev=[A-Za-z0-9_-]{43}$/);
   return cookie;
 }
 

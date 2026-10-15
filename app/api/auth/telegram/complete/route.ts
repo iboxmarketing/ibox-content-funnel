@@ -2,6 +2,7 @@ import { z } from "zod";
 import { randomOpaqueToken, sha256Hex } from "@/lib/auth/crypto";
 import { readSameOriginJson } from "@/lib/auth/request-security";
 import { createServerAuthRepository, sessionCookie } from "@/lib/auth/server";
+import { sessionCookieMode } from "@/lib/auth/session-cookie";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -26,6 +27,12 @@ export async function POST(request: Request) {
       { code: "INVALID_INPUT", error: "Login completion data is invalid." },
       { status: 400, headers: { "Cache-Control": "no-store" } },
     );
+  }
+
+  // Decide the cookie BEFORE consuming the one-time challenge: an origin that cannot hold a
+  // session cookie (plain http off loopback) must not burn the user's approved login.
+  if (!sessionCookieMode(request.url)) {
+    return Response.json({ code: "INSECURE_ORIGIN", error: "Sign in over https." }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
 
   try {

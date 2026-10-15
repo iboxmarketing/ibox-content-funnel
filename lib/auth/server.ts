@@ -1,4 +1,4 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { resolveContentOsAuthConfig } from "./config";
 import { sha256Hex } from "./crypto";
 import {
@@ -7,8 +7,14 @@ import {
   type ContentOsRole,
 } from "./repository";
 
-export const CONTENT_OS_SESSION_COOKIE = "content_os_session";
-export const CONTENT_OS_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+import {
+  DEVELOPMENT_SESSION_COOKIE,
+  PRODUCTION_SESSION_COOKIE,
+  expiredSessionSetCookie,
+  sessionSetCookie,
+  sessionTokenFromCookies,
+} from "./session-cookie";
+
 const COOKIE_TOKEN = /^[A-Za-z0-9_-]{43,128}$/;
 const UPSTREAM_TIMEOUT_MS = 10_000;
 
@@ -46,17 +52,6 @@ export function createServerAuthRepository(): {
   return { config, repository: new ContentOsAuthRepository(config, serverFetch) };
 }
 
-export function sessionTokenFromCookieHeader(cookieHeader: string | null): string | null {
-  if (!cookieHeader) return null;
-  const matches = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => part.startsWith(`${CONTENT_OS_SESSION_COOKIE}=`))
-    .map((part) => part.slice(CONTENT_OS_SESSION_COOKIE.length + 1));
-  if (matches.length !== 1 || !COOKIE_TOKEN.test(matches[0])) return null;
-  return matches[0];
-}
-
 async function validateRawSessionToken(rawToken: string | null): Promise<AuthenticatedUser | null> {
   if (!rawToken || !COOKIE_TOKEN.test(rawToken)) return null;
   try {
@@ -73,8 +68,12 @@ async function validateRawSessionToken(rawToken: string | null): Promise<Authent
   }
 }
 
+/** Server components: the production `__Host-` cookie; the development cookie only on a loopback host. */
 export async function getAuthenticatedUser(): Promise<AuthenticatedUser | null> {
-  const value = (await cookies()).get(CONTENT_OS_SESSION_COOKIE)?.value ?? null;
+  const jar = await cookies();
+  const hostname = ((await headers()).get("host") ?? "").replace(/:\d+$/, "").toLowerCase();
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(hostname);
+  const value = jar.get(PRODUCTION_SESSION_COOKIE)?.value ?? (loopback ? jar.get(DEVELOPMENT_SESSION_COOKIE)?.value : undefined) ?? null;
   return validateRawSessionToken(value);
 }
 
@@ -84,7 +83,7 @@ export type RequestAuthentication =
 
 export async function requireAuthenticatedUser(request: Request): Promise<RequestAuthentication> {
   try {
-    const user = await validateRawSessionToken(sessionTokenFromCookieHeader(request.headers.get("cookie")));
+    const user = await validateRawSessionToken(sessionTokenFromCookies(request.headers.get("cookie"), request.url));
     if (!user) {
       return {
         ok: false,
@@ -118,26 +117,6 @@ export function isHead(user: AuthenticatedUser): boolean {
   return user.role === "HEAD_OF_MARKETING";
 }
 
-export function sessionCookie(rawToken: string, requestUrl: string): string {
-  const secure = new URL(requestUrl).protocol === "https:";
-  return [
-    `${CONTENT_OS_SESSION_COOKIE}=${rawToken}`,
-    "Path=/",
-    `Max-Age=${CONTENT_OS_SESSION_MAX_AGE_SECONDS}`,
-    "HttpOnly",
-    "SameSite=Strict",
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
-}
-
-export function expiredSessionCookie(requestUrl: string): string {
-  const secure = new URL(requestUrl).protocol === "https:";
-  return [
-    `${CONTENT_OS_SESSION_COOKIE}=`,
-    "Path=/",
-    "Max-Age=0",
-    "HttpOnly",
-    "SameSite=Strict",
-    ...(secure ? ["Secure"] : []),
-  ].join("; ");
-}
+export const sessionCookie = sessionSetCookie;
+export const expiredSessionCookie = expiredSessionSetCookie;
+export { sessionTokenFromCookies };

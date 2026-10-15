@@ -14,5 +14,7 @@ declare namespace Cloudflare {
     TASK_BACKEND_SERVICE_AUTH_ENABLED: string;
     TASK_BACKEND_BASE_URL: string;
     CONTENT_OS_TASK_BACKEND_SECRET: string;
+    /** Workers Rate Limiting binding for the public login start endpoint. */
+    LOGIN_START_LIMITER: { limit(input: { key: string }): Promise<{ success: boolean }> };
   }
 }

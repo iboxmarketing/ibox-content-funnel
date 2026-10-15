@@ -4,7 +4,7 @@ import { readSameOriginJson } from "@/lib/auth/request-security";
 import {
   createServerAuthRepository,
   expiredSessionCookie,
-  sessionTokenFromCookieHeader,
+  sessionTokenFromCookies,
 } from "@/lib/auth/server";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   if (!z.object({}).strict().safeParse(body.value).success) {
     return Response.json({ code: "INVALID_INPUT", error: "Logout request is invalid." }, { status: 400, headers: { "Cache-Control": "no-store" } });
   }
-  const rawToken = sessionTokenFromCookieHeader(request.headers.get("cookie"));
+  const rawToken = sessionTokenFromCookies(request.headers.get("cookie"), request.url);
 
   try {
     if (rawToken) {
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       status: 204,
       headers: {
         "Cache-Control": "no-store",
-        "Set-Cookie": expiredSessionCookie(request.url),
+        ...(expiredSessionCookie(request.url) ? { "Set-Cookie": expiredSessionCookie(request.url) as string } : {}),
       },
     });
   } catch (error) {

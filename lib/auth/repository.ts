@@ -32,10 +32,17 @@ const ChallengeStatusSchema = z.enum([
 
 export type ChallengeStatus = z.infer<typeof ChallengeStatusSchema>;
 
+/**
+ * Expected Task Bot contract (Sprint 10D owner decisions 4–5; Codex-owned):
+ * PENDING rows carry a 6-digit `confirmation_code` that the bot also shows;
+ * RATE_LIMITED rows carry no challenge. Absent `confirmation_code` means the
+ * contract is not deployed yet, and Content OS refuses to start a login.
+ */
 const ChallengeRowSchema = z.object({
-  challenge_id: z.string().uuid(),
-  status: z.literal("PENDING"),
-  expires_at: z.string().datetime({ offset: true }),
+  challenge_id: z.string().uuid().nullable(),
+  status: z.enum(["PENDING", "RATE_LIMITED"]),
+  expires_at: z.string().datetime({ offset: true }).nullable(),
+  confirmation_code: z.string().regex(/^\d{6}$/).nullable().optional(),
 });
 
 const ChallengeStatusRowSchema = z.object({
