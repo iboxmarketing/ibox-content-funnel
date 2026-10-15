@@ -11,6 +11,7 @@ import { ids, sql } from "./lib/db.mjs";
 import { mintKey, startGateway } from "./lib/gateway.mjs";
 import { startTaskBot } from "./lib/task-bot.mjs";
 import { makeLocalTls, startWorker } from "./lib/worker.mjs";
+import { signTaskBackendRequest } from "../../lib/content-os-task-backend-signer.ts";
 
 const UPSTREAM = process.env.PGRST_UPSTREAM ?? "http://172.17.0.2:3000";
 const SERVICE = mintKey("service_role");
@@ -86,10 +87,6 @@ async function request(path, { base = worker.url, method = "GET", body, cookie, 
   return { response, status: response.status, body: json, text };
 }
 
-function approveChallenge(challengeId, telegramUserId) {
-  return JSON.parse(sql(`set role service_role; select row_to_json(t) from (select * from public.content_os_auth_approve_challenge('${challengeId}'::uuid, ${telegramUserId}::bigint)) t`));
-}
-
 async function login(telegramUserId) {
   const verifier = randomBytes(32).toString("base64url");
   const verifierHash = createHash("sha256").update(verifier).digest("hex");
@@ -102,7 +99,55 @@ async function login(telegramUserId) {
     headers: { "cf-connecting-ip": `203.0.113.${loginIp++}` },
   });
   assert.equal(started.status, 200, started.text);
-  assert.equal(approveChallenge(started.body.challengeId, telegramUserId).status, "APPROVED");
+  assert.match(started.body.confirmationCode, /^[0-9]{6}$/);
+  assert.match(started.body.telegramDeepLink, new RegExp(`^https://t\\.me/ibox_e2e_bot\\?start=contentos_${started.body.challengeId}$`));
+
+  callbackUpdateId += 1;
+  const beforeTelegram = taskBot.telegramMessages().length;
+  const opened = await request("/api/telegram/webhook", {
+    base: taskBot.url,
+    method: "POST",
+    headers: { "x-telegram-bot-api-secret-token": WEBHOOK_SECRET },
+    body: {
+      update_id: callbackUpdateId,
+      message: {
+        message_id: callbackUpdateId,
+        chat: { id: telegramUserId, type: "private" },
+        from: { id: telegramUserId, is_bot: false, first_name: "E2E" },
+        text: `/start contentos_${started.body.challengeId}`,
+      },
+    },
+  });
+  assert.equal(opened.status, 200, opened.text);
+  const confirmation = taskBot.telegramMessages().slice(beforeTelegram)
+    .find((entry) => entry.url.endsWith("/sendMessage") && String(entry.body?.chat_id) === String(telegramUserId));
+  assert.ok(confirmation, "the genuine Telegram update produced a private confirmation");
+  assert.match(
+    confirmation.body.text,
+    new RegExp(`\\b${started.body.confirmationCode}\\b`),
+    "Telegram displays the same six-digit browser code",
+  );
+  const callbackData = confirmation.body.reply_markup?.inline_keyboard?.[0]?.[0]?.callback_data;
+  assert.equal(callbackData, `contentos-login:approve:${started.body.challengeId}`);
+
+  callbackUpdateId += 1;
+  const approved = await request("/api/telegram/webhook", {
+    base: taskBot.url,
+    method: "POST",
+    headers: { "x-telegram-bot-api-secret-token": WEBHOOK_SECRET },
+    body: {
+      update_id: callbackUpdateId,
+      callback_query: {
+        id: `content-os-login-${callbackUpdateId}`,
+        from: { id: telegramUserId, is_bot: false, first_name: "E2E" },
+        message: { message_id: callbackUpdateId, chat: { id: telegramUserId, type: "private" } },
+        data: callbackData,
+      },
+    },
+  });
+  assert.equal(approved.status, 200, approved.text);
+  const polled = await request(`/api/auth/telegram/status?challengeId=${started.body.challengeId}`);
+  assert.deepEqual([polled.status, polled.body.status], [200, "APPROVED"]);
   const completed = await request("/api/auth/telegram/complete", {
     method: "POST",
     body: { challengeId: started.body.challengeId, verifier },
@@ -114,6 +159,20 @@ async function login(telegramUserId) {
 const teamRead = (cookie, query) => request(`/api/team/tasks?${query}`, { cookie });
 const teamWrite = (cookie, body) => request("/api/team/tasks", { method: "POST", body, cookie });
 const blogWrite = (cookie, body) => request("/api/content-os/blog-review", { method: "POST", body, cookie });
+
+async function taskBotWrite(actorId, method, path, body) {
+  const bodyText = JSON.stringify(body);
+  return request(path, {
+    base: taskBot.url,
+    method,
+    body,
+    headers: signTaskBackendRequest({ method, path, bodyText, externalSubject: actorId }, SHARED_SECRET),
+  });
+}
+
+function assertDenied(result, label) {
+  assert.ok(result.status >= 400 && result.status < 500, `${label}: expected a deterministic 4xx, got ${result.status}: ${result.text}`);
+}
 
 async function telegramResolve(kind, requestId, decision = "APPROVE") {
   callbackUpdateId += 1;
@@ -295,9 +354,35 @@ test("FLOW 6 — existing Telegram-authenticated Blog → Head Review revision/r
   const completed = await blogWrite(sessions.author, { action: "complete", blogTaskId, reviewerId: ids.reviewer, reviewDeadline: DEADLINE_2 });
   assert.equal(completed.status, 200, completed.text);
   const reviewTaskId = completed.body.headReviewTaskId;
+
+  // Reproduce the original High-1 exploit through both application APIs.
+  // The SQL authority layer runs the same matrix separately; none of these
+  // denials rely on hiding controls in the UI.
+  const taskBotAuthorAttempts = [
+    ["edit", () => taskBotWrite(ids.author, "PATCH", `/api/tasks/${reviewTaskId}`, { title: "Author edit", description: null, priority: "low" })],
+    ["direct deadline", () => taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/deadline`, { deadline: DEADLINE_1 })],
+    ["direct self-reassign", () => taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/reassign`, { assigneeId: ids.author })],
+    ["cancel", () => taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/actions`, { action: "CANCEL" })],
+    ["revision request", () => taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/actions`, { action: "REQUEST_REVISION", reason: "Self-review" })],
+    ["approval", () => taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/actions`, { action: "APPROVE" })],
+  ];
+  for (const [label, attempt] of taskBotAuthorAttempts) assertDenied(await attempt(), `Task Bot ${label}`);
+
+  const contentOsAuthorAttempts = [
+    ["edit", () => teamWrite(sessions.author, { action: "edit", taskId: reviewTaskId, title: "Author edit", description: null, priority: "low" })],
+    ["direct deadline", () => teamWrite(sessions.author, { action: "direct-deadline", taskId: reviewTaskId, deadline: DEADLINE_1 })],
+    ["direct self-reassign", () => teamWrite(sessions.author, { action: "direct-reassign", taskId: reviewTaskId, assigneeId: ids.author })],
+    ["cancel", () => teamWrite(sessions.author, { action: "lifecycle", taskId: reviewTaskId, taskAction: "CANCEL" })],
+    ["revision request", () => blogWrite(sessions.author, { action: "request-revision", reviewTaskId, note: "Self-review" })],
+    ["approval", () => blogWrite(sessions.author, { action: "approve", reviewTaskId })],
+  ];
+  for (const [label, attempt] of contentOsAuthorAttempts) assertDenied(await attempt(), `Content OS ${label}`);
+
   assert.equal((await blogWrite(sessions.digital, { action: "request-revision", reviewTaskId, note: "Tighten the opening" })).status, 200);
   const resubmitted = await blogWrite(sessions.author, { action: "complete", blogTaskId, reviewerId: ids.reviewer, reviewDeadline: DEADLINE_2 });
   assert.deepEqual([resubmitted.status, resubmitted.body.headReviewTaskId, resubmitted.body.headReviewCreated], [200, reviewTaskId, false]);
+  assertDenied(await taskBotWrite(ids.author, "POST", `/api/tasks/${reviewTaskId}/actions`, { action: "ACCEPT" }), "Task Bot pickup");
+  assertDenied(await teamWrite(sessions.author, { action: "lifecycle", taskId: reviewTaskId, taskAction: "ACCEPT" }), "Content OS pickup");
   const approved = await blogWrite(sessions.digital, { action: "approve", reviewTaskId });
   assert.deepEqual([approved.status, approved.body.decision], [200, "Approved"]);
   assert.equal(Number(sql(`select count(*) from public.content_task_runtime where source_task_id = '${blogTaskId}'`)), 1);
