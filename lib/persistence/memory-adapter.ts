@@ -21,8 +21,8 @@ import type {
   TaskTypeVersionRecord,
   WorkflowStepRecord,
 } from "./records";
-import { LEGACY_TRANSITIONS, completionAllowed, loadContentOsTaskFacts, revisionAllowed } from "./transition-contract";
-import { TASK_TYPE_CODE_PATTERN, type TaskTypeCode } from "./task-type-codes";
+import { LEGACY_TRANSITIONS, completionAllowed, isSourceBlogForHeadReview, loadContentOsTaskFacts, revisionAllowed } from "./transition-contract";
+import { BLOG_TASK_TYPE_CODE, TASK_TYPE_CODE_PATTERN, type TaskTypeCode } from "./task-type-codes";
 
 export class TransitionRejectedError extends Error {
   constructor(readonly sqlState: "40001" | "42501" | "22023", message: string) {
@@ -35,7 +35,9 @@ let counter = 0;
 const nextId = (prefix: string) => {
   counter += 1;
   const hex = counter.toString(16).padStart(12, "0");
-  return `${prefix.padEnd(8, "0").slice(0, 8)}-0000-4000-8000-${hex}`;
+  // Valid UUID text (the real tables use uuid ids); the prefix only seeds the first group.
+  const seed = Array.from(prefix.padEnd(8, "0").slice(0, 8), (c) => (c.charCodeAt(0) % 16).toString(16)).join("");
+  return `${seed}-0000-4000-8000-${hex}`;
 };
 
 export class InMemoryContentOsStore implements ContentOsStore {
@@ -141,11 +143,33 @@ export class InMemoryContentOsStore implements ContentOsStore {
   }
 }
 
-/** Simulates the Task Bot after the Sprint 9 transition contract is applied. */
+/**
+ * Simulates the Task Bot's FINAL transition function (Codex, marketing-team-task-bot
+ * a9ed78a, 20261014130332_content_os_task_transition_compatibility.sql),
+ * clause for clause:
+ *  - legacy matrix for every task;
+ *  - the Content OS completion gate also applies to legacy paths into DONE
+ *    (a Head Review cannot complete via REVIEW while its Blog is in REVISION);
+ *  - Content OS-only: IN_PROGRESS/REVISION -> DONE for non-review-required
+ *    tasks by the assignee; Blog DONE -> REVISION only via its open Head
+ *    Review, which ATOMICALLY parks that Head Review IN_PROGRESS -> BLOCKED;
+ *    Blog REVISION -> DONE ATOMICALLY restores the Head Review recorded in
+ *    the latest REVISION_REQUESTED event (reviewTaskId) BLOCKED -> ASSIGNED.
+ * Each transition() is all-or-nothing, like the single RPC transaction.
+ */
+export interface SimulatedTaskEvent {
+  readonly taskId: string;
+  readonly actorId: string;
+  readonly eventType: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
 export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
-  readonly tasks = new Map<string, OperationalTask & { title: string }>();
+  readonly tasks = new Map<string, OperationalTask & { title: string; blockedReason: string | null }>();
   readonly actors = new Map<string, OperationalActor>();
   readonly ledger = new Map<string, { requestHash: string; taskId: string }>();
+  readonly events: SimulatedTaskEvent[] = [];
+  readonly revisions: { taskId: string; requestedBy: string; reason: string | null }[] = [];
   readonly transitions: { taskId: string; actorId: string; from: TaskStatus; to: TaskStatus; reason?: string }[] = [];
 
   constructor(private readonly store: ContentOsStore) {}
@@ -170,8 +194,9 @@ export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
     }
     const id = nextId("task");
     // Task Bot autostart: every new task starts IN_PROGRESS.
-    this.tasks.set(id, { id, status: "IN_PROGRESS", assigneeId: input.assigneeId, creatorId: input.creatorId, title: input.title });
+    this.tasks.set(id, { id, status: "IN_PROGRESS", assigneeId: input.assigneeId, creatorId: input.creatorId, title: input.title, blockedReason: null });
     this.ledger.set(ledgerKey, { requestHash: input.requestHash, taskId: id });
+    this.events.push({ taskId: id, actorId: input.creatorId, eventType: "TASK_CREATED", metadata: {} });
     return { taskId: id, created: true };
   }
 
@@ -187,27 +212,66 @@ export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
     if (!actor?.isActive) throw new TransitionRejectedError("42501", "actor is not active");
     const task = this.tasks.get(taskId);
     if (!task) throw new TransitionRejectedError("22023", "task not found");
-    if (task.status === newStatus) return (await this.getTask(taskId)) as OperationalTask;
+    const from = task.status;
+    if (from === newStatus) return (await this.getTask(taskId)) as OperationalTask;
 
-    let allowed = LEGACY_TRANSITIONS[task.status]?.includes(newStatus) ?? false;
-    if (!allowed && (newStatus === "DONE" || newStatus === "REVISION")) {
-      const facts = await loadContentOsTaskFacts(taskId, this.store, this);
-      if (facts && newStatus === "DONE" && (task.status === "IN_PROGRESS" || task.status === "REVISION") && !facts.requiresReview) {
+    let allowed = LEGACY_TRANSITIONS[from]?.includes(newStatus) ?? false;
+    let review: { id: string; to: TaskStatus; blockedReason: string | null } | null = null;
+    const facts = await loadContentOsTaskFacts(taskId, this.store, this);
+
+    if (allowed && newStatus === "DONE" && facts) {
+      const source = facts.runtime.sourceTaskId ? await loadContentOsTaskFacts(facts.runtime.sourceTaskId, this.store, this) : null;
+      if (!completionAllowed(facts, source)) throw new TransitionRejectedError("40001", "task status changed concurrently");
+    }
+
+    if (!allowed && facts && (((from === "IN_PROGRESS" || from === "REVISION") && newStatus === "DONE") || (from === "DONE" && newStatus === "REVISION"))) {
+      if (newStatus === "DONE") {
+        if (facts.requiresReview) throw new TransitionRejectedError("40001", "task status changed concurrently");
         if (task.assigneeId !== actorId) throw new TransitionRejectedError("42501", "only the assignee may complete this Content OS task");
         const source = facts.runtime.sourceTaskId ? await loadContentOsTaskFacts(facts.runtime.sourceTaskId, this.store, this) : null;
-        if (!completionAllowed(facts, source)) throw new TransitionRejectedError("40001", "a Head Review completes only while its source Blog is DONE");
-        allowed = true;
-      } else if (facts && newStatus === "REVISION" && task.status === "DONE") {
-        for (const review of await this.store.runtimesBySource(taskId)) {
-          const reviewFacts = await loadContentOsTaskFacts(review.taskId, this.store, this);
-          if (reviewFacts && revisionAllowed(facts, reviewFacts, actor)) { allowed = true; break; }
+        if (!completionAllowed(facts, source)) throw new TransitionRejectedError("40001", "task status changed concurrently");
+        if (from === "REVISION" && facts.code === BLOG_TASK_TYPE_CODE) {
+          const lastRevision = [...this.events].reverse().find((e) => e.taskId === taskId && e.eventType === "REVISION_REQUESTED" && typeof e.metadata.reviewTaskId === "string");
+          if (!lastRevision) throw new TransitionRejectedError("40001", "source Blog revision has no Head Review provenance");
+          const reviewId = lastRevision.metadata.reviewTaskId as string;
+          const reviewFacts = await loadContentOsTaskFacts(reviewId, this.store, this);
+          if (!reviewFacts || reviewFacts.task.status !== "BLOCKED" || !isSourceBlogForHeadReview(facts, reviewFacts)) {
+            throw new TransitionRejectedError("40001", "Head Review state changed concurrently");
+          }
+          review = { id: reviewId, to: "ASSIGNED", blockedReason: null };
         }
-        if (!allowed) throw new TransitionRejectedError("42501", "no Head Review of this Blog authorizes this actor to request a revision");
+        allowed = true;
+      } else {
+        for (const candidate of await this.store.runtimesBySource(taskId)) {
+          const reviewFacts = await loadContentOsTaskFacts(candidate.taskId, this.store, this);
+          if (reviewFacts && revisionAllowed(facts, reviewFacts, actor)) {
+            review = { id: candidate.taskId, to: "BLOCKED", blockedReason: "Waiting for source Blog revision" };
+            break;
+          }
+        }
+        if (!review) throw new TransitionRejectedError("42501", "only the source Blog's Head Review may request this revision");
+        allowed = true;
       }
     }
     if (!allowed) throw new TransitionRejectedError("40001", "task status changed concurrently");
-    this.transitions.push({ taskId, actorId, from: task.status, to: newStatus, reason });
-    this.tasks.set(taskId, { ...task, status: newStatus });
+    if (newStatus === "BLOCKED" && !reason?.trim()) throw new TransitionRejectedError("22023", "blocked reason is required");
+
+    // Commit point: everything below happens together (single transaction).
+    const metadata = { ...(reason ? { reason } : {}), ...(review ? { reviewTaskId: review.id } : {}) };
+    this.tasks.set(taskId, { ...task, status: newStatus, blockedReason: newStatus === "BLOCKED" ? reason!.trim() : null });
+    this.transitions.push({ taskId, actorId, from, to: newStatus, reason });
+    this.events.push({ taskId, actorId, eventType: "STATUS_CHANGED", metadata });
+    const special = newStatus === "REVISION" ? "REVISION_REQUESTED" : newStatus === "DONE" ? "TASK_COMPLETED" : newStatus === "BLOCKED" ? "TASK_BLOCKED" : from === "BLOCKED" ? "TASK_UNBLOCKED" : null;
+    if (special) this.events.push({ taskId, actorId, eventType: special, metadata });
+    if (newStatus === "REVISION") this.revisions.push({ taskId, requestedBy: actorId, reason: reason?.trim() || null });
+    if (review) {
+      const reviewTask = this.tasks.get(review.id)!;
+      this.tasks.set(review.id, { ...reviewTask, status: review.to, blockedReason: review.blockedReason });
+      this.transitions.push({ taskId: review.id, actorId, from: reviewTask.status, to: review.to });
+      const reviewMetadata = { sourceTaskId: taskId, coupledContentOsTransition: true, ...(review.blockedReason ? { reason: review.blockedReason } : {}) };
+      this.events.push({ taskId: review.id, actorId, eventType: "STATUS_CHANGED", metadata: reviewMetadata });
+      this.events.push({ taskId: review.id, actorId, eventType: review.to === "BLOCKED" ? "TASK_BLOCKED" : "TASK_UNBLOCKED", metadata: reviewMetadata });
+    }
     return (await this.getTask(taskId)) as OperationalTask;
   }
 }

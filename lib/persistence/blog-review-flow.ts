@@ -1,23 +1,32 @@
 /**
- * Sprint 9B vertical slice: Knowledge Node -> Blog -> Blog completion ->
- * Head Review -> revision of the SAME Blog -> corrected Blog DONE, with the
- * persisted provenance the Task Bot needs (contract:
- * docs/persistence/SPRINT_9_TRANSITION_CONTRACT.md).
+ * Persisted vertical slice: Knowledge Node -> Blog -> Blog DONE -> ONE Head
+ * Review -> revision of the SAME Blog -> corrected Blog DONE -> SAME Head
+ * Review resumes -> Head Review approves.
  *
- * Production state mapping (existing seven statuses only):
- *  - Blog: IN_PROGRESS -> DONE (not review-required) ; DONE -> REVISION by the
- *    Head Review decision ; REVISION -> DONE by the Blog's assignee.
- *  - Head Review: created IN_PROGRESS once per Blog task (idempotency key
- *    head-review:<blogTaskId>) and REUSED; it stays IN_PROGRESS while the
- *    Blog is in REVISION (the "waiting" is derived from the Blog's status,
- *    so no cross-actor BLOCKED/RESUME is needed) and completes only while the
- *    Blog is DONE.
- * Status changes go through the Task Bot only; this service never writes
- * public.tasks.
+ * Approved lifecycle (existing seven statuses only):
+ *   Blog         IN_PROGRESS -> DONE -> REVISION -> DONE ...
+ *   Head Review  IN_PROGRESS -> BLOCKED (revision requested) -> ASSIGNED
+ *                (Blog corrected; decision cleared) -> IN_PROGRESS (reviewer
+ *                picks it up again) -> DONE (approved) | BLOCKED (again)
+ *
+ * The two-task changes are ATOMIC in the Task Bot: one transition on the
+ * Blog (DONE -> REVISION / REVISION -> DONE) moves the coupled Head Review
+ * in the same transaction (Task Bot a9ed78a). This service therefore issues
+ * exactly ONE Task Bot transition per step and never moves the Head Review
+ * itself for those two steps. Content OS state touched here is limited to
+ * the Head Review's informational decision fields, which are always written
+ * AFTER the Task Bot transition and can be re-derived from Task Bot state at
+ * any time (`reconcile`). Every operation is idempotent: it reads the
+ * current statuses and performs only what is still missing, so a retry
+ * after any partial failure converges without creating a task.
+ *
+ * Only stable ids, codes and lineage are used — never titles or names.
+ * Status changes go only through OperationalTaskGateway (Task Bot RPCs);
+ * ContentOsStore writes only content_* rows.
  */
 import type { ContentOsStore, OperationalTaskGateway } from "./ports";
 import { PersistenceConflictError } from "./ports";
-import type { TaskLinkRecord } from "./records";
+import type { OperationalActor, TaskLinkRecord, TaskStatus } from "./records";
 import { completionAllowed, loadContentOsTaskFacts, revisionAllowed, type ContentOsTaskFacts } from "./transition-contract";
 import { BLOG_TASK_TYPE_CODE, HEAD_REVIEW_TASK_TYPE_CODE } from "./task-type-codes";
 import { deterministicUuid, idempotencyKeys, neutralizePostingTag, requestHash } from "./idempotency";
@@ -30,8 +39,16 @@ export class ContentOsRuleError extends Error {
   }
 }
 
-/** Head Review decision fields (same ids/values as the Task Type fixture). */
+/** Head Review decision fields (same ids/values as the Task Type fixture). Informational only. */
 export const HEAD_REVIEW_FIELDS = { decision: "review-decision", note: "review-note", approve: "Approved", revision: "Revision requested" } as const;
+
+/**
+ * Future extension point: if a Content OS Task Type ever needs the Task Bot
+ * posting checklist, it must be requested explicitly through a creation
+ * parameter on the Task Bot RPC (not by a title convention). Not supported by
+ * the current RPC, so the only accepted value today is "NONE".
+ */
+export type PostingChecklistRequest = "NONE";
 
 export interface StartBlogInput {
   /** Caller-supplied stable request key: a retry with the same key never duplicates anything. */
@@ -43,20 +60,35 @@ export interface StartBlogInput {
   readonly deadline: string;
   /** The Research task that produced this Blog, if any (lineage). */
   readonly sourceTaskId?: string | null;
+  readonly postingChecklist?: PostingChecklistRequest;
 }
 
 export interface CompleteBlogInput {
   readonly blogTaskId: string;
   readonly actorId: string;
-  /** Used only the first time the Head Review is created. */
+  /** Used only when the Head Review does not exist yet. */
   readonly reviewerId: string;
   readonly reviewDeadline: string;
+}
+
+export interface BlogReviewState {
+  readonly blogTaskId: string;
+  readonly blogStatus: TaskStatus;
+  readonly headReviewTaskId: string | null;
+  readonly headReviewStatus: TaskStatus | null;
+  readonly decision: string | null;
+}
+
+export interface ReconcileResult extends BlogReviewState {
+  /** What reconcile changed (Content OS decision fields only), or why it could not. */
+  readonly actions: readonly string[];
 }
 
 export class BlogReviewFlow {
   constructor(private readonly store: ContentOsStore, private readonly tasks: OperationalTaskGateway) {}
 
   async startBlog(input: StartBlogInput): Promise<{ blogTaskId: string; blogId: string; created: boolean }> {
+    if (input.postingChecklist && input.postingChecklist !== "NONE") throw new ContentOsRuleError("posting checklists are not requested by Content OS");
     const node = await this.store.getKnowledgeNode(input.knowledgeNodeId);
     if (!node) throw new ContentOsRuleError(`knowledge node ${input.knowledgeNodeId} does not exist`);
     const version = await this.store.currentTaskTypeVersion(BLOG_TASK_TYPE_CODE);
@@ -79,7 +111,7 @@ export class BlogReviewFlow {
       deadline: input.deadline,
     });
 
-    // Runtime is write-once: a retry keeps the version pinned by the first attempt.
+    // Write-once: a retry keeps the version pinned by the first attempt.
     await this.store.ensureRuntime({
       taskId, taskTypeVersionId: version.id, workflowRunId: null, workflowTemplateVersionId: null, workflowStepId: null,
       sourceTaskId: input.sourceTaskId ?? null, outcome: null, skipReason: null, fieldValues: {},
@@ -91,34 +123,131 @@ export class BlogReviewFlow {
     return { blogTaskId: taskId, blogId, created };
   }
 
-  /** Completes (or re-completes after revision) the Blog and returns its ONE Head Review. */
-  async completeBlog(input: CompleteBlogInput): Promise<{ headReviewTaskId: string; headReviewCreated: boolean }> {
-    const blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
+  /**
+   * First completion AND resubmission after revision. One Task Bot
+   * transition (-> DONE); on resubmission the Task Bot restores the SAME
+   * Head Review BLOCKED -> ASSIGNED atomically. Then ensures exactly one
+   * Head Review exists and aligns its decision fields.
+   */
+  async completeBlog(input: CompleteBlogInput): Promise<BlogReviewState & { headReviewCreated: boolean }> {
+    let blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
     if (blog.requiresReview) throw new ContentOsRuleError("this Blog task is review-required; it completes through REVIEW, not directly");
-    if (blog.task.status !== "DONE") await this.tasks.transition(blog.task.id, input.actorId, "DONE");
-    return this.ensureHeadReview(blog, input);
+    if (blog.task.status === "IN_PROGRESS" || blog.task.status === "REVISION") {
+      await this.tasks.transition(blog.task.id, input.actorId, "DONE");
+      blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
+    } else if (blog.task.status !== "DONE") {
+      throw new ContentOsRuleError(`a ${blog.task.status} Blog cannot be completed`);
+    }
+    const { headReviewTaskId, headReviewCreated } = await this.ensureHeadReview(blog, input);
+    const state = await this.alignDecision(blog.task.id, headReviewTaskId);
+    return { ...state, headReviewCreated };
   }
 
-  /** Head Review decision "Revision requested": the SAME Blog task goes DONE -> REVISION. */
-  async requestRevision(input: { reviewTaskId: string; actorId: string; note: string }): Promise<{ blogTaskId: string }> {
-    const review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
-    if (!review.runtime.sourceTaskId) throw new ContentOsRuleError("Head Review has no source Blog task");
-    const blog = await this.requireFacts(review.runtime.sourceTaskId, BLOG_TASK_TYPE_CODE);
+  /**
+   * Head Review "Revision requested". ONE Task Bot transition: Blog DONE ->
+   * REVISION, which atomically parks the SAME Head Review as BLOCKED.
+   * Idempotent: if that already happened (lost response / retry), only the
+   * decision fields are (re)written.
+   */
+  async requestRevision(input: { reviewTaskId: string; actorId: string; note: string }): Promise<BlogReviewState> {
+    const note = input.note.trim();
+    if (!note) throw new ContentOsRuleError("a revision request needs a note");
+    let review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
+    const blogTaskId = this.sourceOf(review);
+    let blog = await this.requireFacts(blogTaskId, BLOG_TASK_TYPE_CODE);
     const actor = await this.tasks.getActor(input.actorId);
-    if (!revisionAllowed(blog, review, actor)) throw new ContentOsRuleError("this actor/review may not send this Blog back for revision");
-    if (!input.note.trim()) throw new ContentOsRuleError("a revision request needs a note");
-    await this.store.mergeFieldValues(review.task.id, { [HEAD_REVIEW_FIELDS.decision]: HEAD_REVIEW_FIELDS.revision, [HEAD_REVIEW_FIELDS.note]: input.note.trim() });
-    await this.tasks.transition(blog.task.id, input.actorId, "REVISION", input.note.trim());
-    return { blogTaskId: blog.task.id };
+    if (!isReviewAuthority(review, actor)) throw new ContentOsRuleError("this actor may not decide this Head Review");
+
+    const alreadyApplied = blog.task.status === "REVISION" && review.task.status === "BLOCKED";
+    if (!alreadyApplied) {
+      if (review.task.status === "ASSIGNED") {
+        // The reviewer picks the review up again (legacy ACCEPT) before deciding.
+        await this.tasks.transition(review.task.id, input.actorId, "IN_PROGRESS");
+        review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
+      }
+      if (!revisionAllowed(blog, review, actor)) throw new ContentOsRuleError("this Head Review may not send this Blog back for revision now");
+      await this.tasks.transition(blog.task.id, input.actorId, "REVISION", note);
+      blog = await this.requireFacts(blogTaskId, BLOG_TASK_TYPE_CODE);
+    }
+    await this.store.mergeFieldValues(review.task.id, { [HEAD_REVIEW_FIELDS.decision]: HEAD_REVIEW_FIELDS.revision, [HEAD_REVIEW_FIELDS.note]: note });
+    return this.state(blogTaskId, review.task.id);
   }
 
-  /** Head Review approval: completes the SAME Head Review, only while its Blog is DONE. */
-  async approve(input: { reviewTaskId: string; actorId: string; note?: string }): Promise<void> {
-    const review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
-    const blog = review.runtime.sourceTaskId ? await loadContentOsTaskFacts(review.runtime.sourceTaskId, this.store, this.tasks) : null;
-    if (!completionAllowed(review, blog)) throw new ContentOsRuleError("the Head Review completes only while its source Blog is DONE");
-    await this.store.mergeFieldValues(review.task.id, { [HEAD_REVIEW_FIELDS.decision]: HEAD_REVIEW_FIELDS.approve, [HEAD_REVIEW_FIELDS.note]: input.note?.trim() ?? "" });
-    await this.tasks.transition(review.task.id, input.actorId, "DONE");
+  /** Head Review approval: the SAME Head Review -> DONE, only while its Blog is DONE. Idempotent. */
+  async approve(input: { reviewTaskId: string; actorId: string; note?: string }): Promise<BlogReviewState> {
+    let review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
+    const blogTaskId = this.sourceOf(review);
+    if (review.task.status !== "DONE") {
+      const actor = await this.tasks.getActor(input.actorId);
+      if (!isReviewAuthority(review, actor) || review.task.assigneeId !== input.actorId) {
+        throw new ContentOsRuleError("only the Head Review assignee completes the review");
+      }
+      if (review.task.status === "ASSIGNED") {
+        await this.tasks.transition(review.task.id, input.actorId, "IN_PROGRESS");
+        review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
+      }
+      const blog = await loadContentOsTaskFacts(blogTaskId, this.store, this.tasks);
+      if (!completionAllowed(review, blog)) throw new ContentOsRuleError("the Head Review completes only while its source Blog is DONE");
+      await this.tasks.transition(review.task.id, input.actorId, "DONE");
+    }
+    await this.store.mergeFieldValues(review.task.id, { [HEAD_REVIEW_FIELDS.decision]: HEAD_REVIEW_FIELDS.approve, ...(input.note?.trim() ? { [HEAD_REVIEW_FIELDS.note]: input.note.trim() } : {}) });
+    return this.state(blogTaskId, review.task.id);
+  }
+
+  /**
+   * Explicit reconciliation for THIS slice. The Task Bot side is atomic, so
+   * the only state that can lag is the Head Review's informational decision
+   * field (written after each transition). It is re-derived from Task Bot
+   * statuses; nothing operational is changed and no task is created.
+   */
+  async reconcile(blogTaskId: string): Promise<ReconcileResult> {
+    const blog = await this.requireFacts(blogTaskId, BLOG_TASK_TYPE_CODE);
+    const reviewTaskId = await this.findHeadReview(blog.task.id);
+    if (!reviewTaskId) {
+      const actions = blog.task.status === "DONE" ? ["HEAD_REVIEW_MISSING: retry completeBlog (idempotent) to create or re-attach it"] : [];
+      return { ...(await this.state(blogTaskId, null)), actions };
+    }
+    const before = await this.state(blogTaskId, reviewTaskId);
+    const after = await this.alignDecision(blogTaskId, reviewTaskId);
+    return { ...after, actions: before.decision === after.decision ? [] : [`decision ${before.decision ?? "∅"} -> ${after.decision ?? "∅"}`] };
+  }
+
+  async state(blogTaskId: string, reviewTaskId: string | null): Promise<BlogReviewState> {
+    const blog = await this.tasks.getTask(blogTaskId);
+    if (!blog) throw new PersistenceConflictError(`task ${blogTaskId} not found`);
+    const review = reviewTaskId ? await this.tasks.getTask(reviewTaskId) : null;
+    const runtime = reviewTaskId ? await this.store.getRuntime(reviewTaskId) : null;
+    const decision = runtime?.fieldValues[HEAD_REVIEW_FIELDS.decision];
+    return {
+      blogTaskId,
+      blogStatus: blog.status,
+      headReviewTaskId: reviewTaskId,
+      headReviewStatus: review?.status ?? null,
+      decision: typeof decision === "string" ? decision : null,
+    };
+  }
+
+  /** Decision derived from Task Bot state: BLOCKED while the Blog is in REVISION ⇒ "Revision requested";
+   * DONE ⇒ "Approved"; otherwise (resubmitted / open) ⇒ cleared. */
+  private async alignDecision(blogTaskId: string, reviewTaskId: string): Promise<BlogReviewState> {
+    const current = await this.state(blogTaskId, reviewTaskId);
+    const expected =
+      current.headReviewStatus === "DONE" ? HEAD_REVIEW_FIELDS.approve
+        : current.headReviewStatus === "BLOCKED" && current.blogStatus === "REVISION" ? HEAD_REVIEW_FIELDS.revision
+          : null;
+    if (current.decision !== expected) {
+      await this.store.mergeFieldValues(reviewTaskId, { [HEAD_REVIEW_FIELDS.decision]: expected });
+      return { ...current, decision: expected };
+    }
+    return current;
+  }
+
+  private async findHeadReview(blogTaskId: string): Promise<string | null> {
+    for (const child of await this.store.runtimesBySource(blogTaskId)) {
+      const version = await this.store.getTaskTypeVersion(child.taskTypeVersionId);
+      if (version?.code === HEAD_REVIEW_TASK_TYPE_CODE) return child.taskId;
+    }
+    return null;
   }
 
   private async ensureHeadReview(blog: ContentOsTaskFacts, input: CompleteBlogInput) {
@@ -126,20 +255,20 @@ export class BlogReviewFlow {
     if (blogLink?.entityType !== "BLOG") throw new ContentOsRuleError("Blog task has no PRIMARY Blog entity");
 
     // Reuse: a Blog task has exactly one Head Review, found by stable code + lineage.
-    for (const child of await this.store.runtimesBySource(blog.task.id)) {
-      const version = await this.store.getTaskTypeVersion(child.taskTypeVersionId);
-      if (version?.code === HEAD_REVIEW_TASK_TYPE_CODE) return { headReviewTaskId: child.taskId, headReviewCreated: false };
-    }
+    const existing = await this.findHeadReview(blog.task.id);
+    if (existing) return { headReviewTaskId: existing, headReviewCreated: false };
 
     const version = await this.store.currentTaskTypeVersion(HEAD_REVIEW_TASK_TYPE_CODE);
     if (!version) throw new ContentOsRuleError("no current HEAD_REVIEW Task Type version");
     const blogRecord = await this.store.getBlog(blogLink.entityId);
     const title = neutralizePostingTag(`Head Review — ${blogRecord?.title ?? "Blog"}`).slice(0, 200);
-    const request = { kind: HEAD_REVIEW_TASK_TYPE_CODE, blogTaskId: blog.task.id, blogId: blogLink.entityId, creatorId: input.actorId, assigneeId: input.reviewerId, deadline: input.reviewDeadline, title };
+    // The hash covers only the review's identity (which Blog task / entity),
+    // so a retry after a lost response returns the SAME task even if the
+    // caller now passes a different reviewer or deadline.
     const { taskId, created } = await this.tasks.createTaskIdempotent({
       purpose: "CREATE_TASK",
       idempotencyKey: idempotencyKeys.headReviewTask(blog.task.id),
-      requestHash: requestHash(request),
+      requestHash: requestHash({ kind: HEAD_REVIEW_TASK_TYPE_CODE, blogTaskId: blog.task.id, blogId: blogLink.entityId }),
       creatorId: input.actorId,
       assigneeId: input.reviewerId,
       title,
@@ -158,10 +287,20 @@ export class BlogReviewFlow {
     return { headReviewTaskId: taskId, headReviewCreated: created };
   }
 
+  private sourceOf(review: ContentOsTaskFacts): string {
+    if (!review.runtime.sourceTaskId) throw new ContentOsRuleError("Head Review has no source Blog task");
+    return review.runtime.sourceTaskId;
+  }
+
   private async requireFacts(taskId: string, expectedCode: string): Promise<ContentOsTaskFacts> {
     const facts = await loadContentOsTaskFacts(taskId, this.store, this.tasks);
     if (!facts) throw new PersistenceConflictError(`task ${taskId} is not a Content OS task`);
     if (facts.code !== expectedCode) throw new ContentOsRuleError(`task ${taskId} is a ${facts.code} task, expected ${expectedCode}`);
     return facts;
   }
+}
+
+/** The people who may decide a Head Review: its active assignee or the active Head (same as content_os_revision_allowed). */
+function isReviewAuthority(review: ContentOsTaskFacts, actor: OperationalActor | null): boolean {
+  return actor !== null && actor.isActive && (review.task.assigneeId === actor.id || actor.role === "HEAD_OF_MARKETING");
 }

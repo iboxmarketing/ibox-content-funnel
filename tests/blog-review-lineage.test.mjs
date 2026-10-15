@@ -123,7 +123,7 @@ test("3. unrelated Content OS DONE tasks cannot be sent to REVISION (Research, S
   const lonelyBlog = await w.flow.startBlog({ requestKey: "req-lonely", knowledgeNodeId: w.node.id, blogTitle: "Blog B", creatorId: HEAD, assigneeId: AUTHOR, deadline: DEADLINE });
   await w.tasks.transition(lonelyBlog.blogTaskId, AUTHOR, "DONE");
   for (const target of [research, seo, lonelyBlog.blogTaskId]) {
-    await assert.rejects(() => w.tasks.transition(target, HEAD, "REVISION", "x"), /no Head Review/, target);
+    await assert.rejects(() => w.tasks.transition(target, HEAD, "REVISION", "x"), /only the source Blog's Head Review/, target);
     assert.equal((await w.tasks.getTask(target)).status, "DONE");
   }
   // The SEO task (same source, same Blog entity) is not a reviewer either.
@@ -137,47 +137,68 @@ test("4. the wrong reviewer cannot request the revision (unrelated member, the B
   const w = world();
   const { reviewTaskId, blogTaskId } = await blogThroughHeadReview(w);
   for (const actorId of [OTHER, AUTHOR]) {
-    await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId, note: "x" }), /may not send this Blog back/);
-    await assert.rejects(() => w.tasks.transition(blogTaskId, actorId, "REVISION", "x"), /no Head Review/);
+    await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId, note: "x" }), /may not decide this Head Review/);
+    await assert.rejects(() => w.tasks.transition(blogTaskId, actorId, "REVISION", "x"), /only the source Blog's Head Review/);
   }
   w.tasks.actors.set(REVIEWER, { id: REVIEWER, role: "DIGITAL_MARKETER", isActive: false });
-  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "x" }), /may not send this Blog back/);
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "x" }), /may not decide this Head Review/);
   assert.equal((await w.tasks.getTask(blogTaskId)).status, "DONE");
+  assert.equal((await w.tasks.getTask(reviewTaskId)).status, "IN_PROGRESS", "the review was not touched");
 });
 
-test("5-7. correct Head Review sends the SAME Blog to REVISION; resubmission reuses the Head Review and creates nothing", async () => {
+test("5-7. approved lifecycle: revision parks the SAME Head Review BLOCKED; resubmit restores it ASSIGNED; approve -> DONE; nothing new", async () => {
   const w = world();
   const { blogTaskId, blogId, reviewTaskId } = await blogThroughHeadReview(w);
   const tasksBefore = w.tasks.tasks.size;
 
-  const { blogTaskId: revised } = await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "Kirishni qisqartiring" });
-  assert.equal(revised, blogTaskId, "the SAME Blog task");
-  assert.equal((await w.tasks.getTask(blogTaskId)).status, "REVISION");
-  assert.equal((await w.tasks.getTask(reviewTaskId)).status, "IN_PROGRESS", "Head Review waits (derived from the Blog's status)");
+  const revised = await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "Kirishni qisqartiring" });
+  assert.deepEqual(revised, { blogTaskId, blogStatus: "REVISION", headReviewTaskId: reviewTaskId, headReviewStatus: "BLOCKED", decision: "Revision requested" });
+  assert.equal(w.tasks.tasks.get(reviewTaskId).blockedReason, "Waiting for source Blog revision");
   assert.deepEqual((await w.store.getRuntime(reviewTaskId)).fieldValues, { "review-decision": "Revision requested", "review-note": "Kirishni qisqartiring" });
-  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "again" }), /may not send this Blog back/, "no second revision while in REVISION");
+  const revisionEvent = w.tasks.events.find((e) => e.taskId === blogTaskId && e.eventType === "REVISION_REQUESTED");
+  assert.equal(revisionEvent.metadata.reviewTaskId, reviewTaskId, "the deciding review is recorded on the Blog event");
+  assert.ok(w.tasks.events.some((e) => e.taskId === reviewTaskId && e.eventType === "TASK_BLOCKED" && e.metadata.sourceTaskId === blogTaskId && e.metadata.coupledContentOsTransition === true));
+  assert.equal(w.tasks.revisions.filter((r) => r.taskId === blogTaskId).length, 1);
   await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /only while its source Blog is DONE/);
+  await assert.rejects(() => w.tasks.transition(reviewTaskId, REVIEWER, "DONE"), /changed concurrently/, "a BLOCKED review cannot complete");
 
   const resubmitted = await w.flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: OTHER, reviewDeadline: "2026-11-01T00:00:00.000Z" });
-  assert.deepEqual(resubmitted, { headReviewTaskId: reviewTaskId, headReviewCreated: false }, "same Head Review reused");
-  assert.equal((await w.tasks.getTask(blogTaskId)).status, "DONE");
+  assert.deepEqual(resubmitted, { blogTaskId, blogStatus: "DONE", headReviewTaskId: reviewTaskId, headReviewStatus: "ASSIGNED", decision: null, headReviewCreated: false });
+  assert.equal((await w.store.getRuntime(reviewTaskId)).fieldValues["review-note"], "Kirishni qisqartiring", "the note is kept; only the decision is cleared");
   assert.equal(w.tasks.tasks.size, tasksBefore, "no new Blog or Head Review task");
   assert.equal(w.store.blogs.size, 1);
   assert.deepEqual(w.tasks.transitions.filter((t) => t.taskId === blogTaskId).map((t) => `${t.from}->${t.to}`), ["IN_PROGRESS->DONE", "DONE->REVISION", "REVISION->DONE"]);
+  assert.deepEqual(w.tasks.transitions.filter((t) => t.taskId === reviewTaskId).map((t) => `${t.from}->${t.to}`), ["IN_PROGRESS->BLOCKED", "BLOCKED->ASSIGNED"], "only coupled Task Bot moves so far");
   assert.equal((await w.store.linksForTask(reviewTaskId)).find((l) => l.relation === "PRIMARY").entityId, blogId);
 
-  await w.flow.approve({ reviewTaskId, actorId: REVIEWER, note: "OK" });
-  assert.equal((await w.tasks.getTask(reviewTaskId)).status, "DONE");
+  const approved = await w.flow.approve({ reviewTaskId, actorId: REVIEWER, note: "OK" });
+  assert.deepEqual([approved.headReviewStatus, approved.decision], ["DONE", "Approved"]);
+  assert.deepEqual(w.tasks.transitions.filter((t) => t.taskId === reviewTaskId).map((t) => `${t.from}->${t.to}`).slice(2), ["ASSIGNED->IN_PROGRESS", "IN_PROGRESS->DONE"]);
   await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "late" }), /may not send this Blog back/, "a completed review cannot reopen the Blog");
+});
+
+test("a second revision cycle reuses the SAME Head Review again (picked up from ASSIGNED)", async () => {
+  const w = world();
+  const { blogTaskId, reviewTaskId } = await blogThroughHeadReview(w);
+  await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "1" });
+  await w.flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE });
+  const second = await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "2" });
+  assert.deepEqual([second.blogStatus, second.headReviewStatus, second.decision], ["REVISION", "BLOCKED", "Revision requested"]);
+  const latest = [...w.tasks.events].reverse().find((e) => e.taskId === blogTaskId && e.eventType === "REVISION_REQUESTED");
+  assert.equal(latest.metadata.reviewTaskId, reviewTaskId);
+  await w.flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: REVIEWER, reviewDeadline: DEADLINE });
+  assert.equal((await w.tasks.getTask(reviewTaskId)).status, "ASSIGNED");
+  assert.equal(w.tasks.tasks.size, 2, "still exactly one Blog task and one Head Review task");
 });
 
 test("the active Head may decide on any Head Review; the Head Review cannot be re-pointed", async () => {
   const w = world();
   const { reviewTaskId, blogTaskId } = await blogThroughHeadReview(w);
-  await w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "Head decision" });
-  assert.equal((await w.tasks.getTask(blogTaskId)).status, "REVISION");
+  const state = await w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "Head decision" });
+  assert.deepEqual([state.blogStatus, state.headReviewStatus], ["REVISION", "BLOCKED"]);
   const kept = await w.store.ensureRuntime({ ...(await w.store.getRuntime(reviewTaskId)), sourceTaskId: "99999999-0000-4000-8000-000000000000" });
   assert.equal(kept.sourceTaskId, blogTaskId, "provenance is write-once");
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: HEAD }), /only the Head Review assignee completes/, "the Head decides revisions but completion stays the assignee's");
 });
 
 test("8. pinned config survives newer Task Type versions", async () => {

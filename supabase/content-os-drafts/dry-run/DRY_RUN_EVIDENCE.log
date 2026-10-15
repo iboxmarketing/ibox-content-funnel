@@ -33,8 +33,8 @@ PASS T04 Material without Destination is allowed (destination_id NULL)
 PASS T08 ShootSession membership is stored once (content_materials.shoot_session_id)
 PASS T03 material format CHECK (23514 new row for relation "content_materials" violates check constraint "content_materials_format_check")
 PASS T03 blog state CHECK (23514 new row for relation "content_blogs" violates check constraint "content_blogs_state_check")
-<stdin>:123: NOTICE:  PASS T03 atomic idea formats ⊆ material formats (23514 new row for relation "content_atomic_ideas" violates check constraint "content_atomic_ideas_selected_formats_check")
-124: NOTICE:  PASS T03 destination type CHECK (23514 new row for relation "content_destinations" violates check constraint "content_destinations_type_check")
+PASS T03 atomic idea formats ⊆ material formats (23514 new row for relation "content_atomic_ideas" violates check constraint "content_atomic_ideas_selected_formats_check")
+PASS T03 destination type CHECK (23514 new row for relation "content_destinations" violates check constraint "content_destinations_type_check")
 PASS T04 CTA type and text are set together (23514 new row for relation "content_materials" violates check constraint "content_materials_cta_pair_check")
 PASS T05 one Material per (idea, format) (23505 duplicate key value violates unique constraint "content_materials_one_per_idea_format_idx")
 PASS T11 legacy stable ref is unique (CP-070) (23505 duplicate key value violates unique constraint "content_problem_categories_legacy_ref_idx")
@@ -43,8 +43,8 @@ PASS T07 reverse lookup: one Material has many tasks (incl. the shared Shoot)
 PASS T07 one entity shared by several tasks
 PASS T07 at most one PRIMARY entity per task (23505 duplicate key value violates unique constraint "content_task_links_one_primary_idx")
 PASS T07 idempotent uniqueness (same link twice) (23505 duplicate key value violates unique constraint "content_task_links_pkey")
-PASS T07 polymorphic entity_id must exist (23503 content entity MATERIAL:0ef2223e-0aa9-4dc9-95ee-8eadfe311abd does not exist)
-PASS T07 entity_id must exist in the table of its entity_type (a Blog id is not a Material) (23503 content entity MATERIAL:1484303d-63dd-4859-8378-335f8faab7a8 does not exist)
+PASS T07 polymorphic entity_id must exist (23503 content entity MATERIAL:121aebbb-de7b-4791-b472-a6179a33621e does not exist)
+PASS T07 entity_id must exist in the table of its entity_type (a Blog id is not a Material) (23503 content entity MATERIAL:31bc8139-8589-49f5-b0ca-58a03b4da235 does not exist)
 PASS T07 FK to existing public.tasks.id (23503 insert or update on table "content_task_links" violates foreign key constraint "content_task_links_task_id_fkey")
 PASS T07 links are insert-only (55000 content_task_links rows are immutable; insert a new version instead)
 PASS T06 content_task_links FK RESTRICT protects the operational task (23503 update or delete on table "tasks" violates foreign key constraint "content_task_links_task_id_fkey" on table "content_task_links")
@@ -63,9 +63,9 @@ PASS T11 a published template version is immutable (55000 published workflow tem
 PASS T11 no step can be added to a published version (55000 steps of a published workflow template version are immutable)
 PASS T11 published dependencies are immutable (55000 steps of a published workflow template version are immutable)
 PASS T11 dependencies cannot cross template versions (23503 insert or update on table "content_workflow_step_dependencies" violates foreign key constraint "content_workflow_step_depende_template_version_id_depends__fkey")
-PASS T09 run root entity must exist (23503 root content entity MATERIAL:d8d31d95-8273-430e-b8cd-923c4fc0515e does not exist)
+PASS T09 run root entity must exist (23503 root content entity MATERIAL:3d05e681-e898-4258-8354-dec850636c99 does not exist)
 PASS T11 task keeps its pinned Task Type v1 although v2 is current
-<stdin>:237: NOTICE:  PASS T09 one Shoot -> many Edit/Cover/Caption (concrete task_id lineage)
+PASS T09 one Shoot -> many Edit/Cover/Caption (concrete task_id lineage)
 PASS T09 Head Review -> the SAME Blog task (revision returns to it)
 PASS T09 Publish -> Publish Check lineage
 PASS T09 a task cannot be its own source (23514 new row for relation "content_task_runtime" violates check constraint "content_task_runtime_no_self_lineage_check")
@@ -81,13 +81,13 @@ PASS T10 a step must belong to the run's pinned template version (23503 insert o
 PASS T10 runtime is keyed by an EXISTING public.tasks.id (23503 insert or update on table "content_task_runtime" violates foreign key constraint "content_task_runtime_task_id_fkey")
 PASS T10 SKIPPED with reason is accepted
 PASS T12 named links keep a stable order
-<stdin>:262: NOTICE:  PASS T12 link URL must be http(s) (23514 new row for relation "content_task_url_links" violates check constraint "content_task_url_links_url_check")
+PASS T12 link URL must be http(s) (23514 new row for relation "content_task_url_links" violates check constraint "content_task_url_links_url_check")
 PASS T12 one link per position (23505 duplicate key value violates unique constraint "content_task_url_links_task_id_position_key")
 PASS T15 two successful channels feed ONE Material-level review
 PASS T15 one result review per Material (23505 duplicate key value violates unique constraint "content_material_result_reviews_pkey")
 PASS T15 a publish task is a source once (23505 duplicate key value violates unique constraint "content_material_result_review_sources_pkey")
 PASS T15 review sources are append-only (55000 content_material_result_review_sources rows are immutable; insert a new version instead)
-<stdin>:283: NOTICE:  PASS T13 retry with same key + same request returns the same task (created=false)
+PASS T13 retry with same key + same request returns the same task (created=false)
 PASS T13 retries never duplicate the task
 PASS T13 same key + different request conflicts (23505 IDEMPOTENCY_KEY_REUSED: CREATE_TASK key req-0001 was used for a different request)
 PASS T13 the conflicting request created nothing
@@ -149,7 +149,7 @@ PASS 9B-8 a task created on v3 follows v3
 PASS 9B-8 pinned task keeps its stable code
 PASS 9B-9 a non-boolean override fails safe (review required)
 PASS 9B-9 a JSON null override falls back to the pinned version (same as ?? in the runtime)
-NOTICE:  PASS 9B-9 a boolean step override wins over the pinned version
+PASS 9B-9 a boolean step override wins over the pinned version
 PASS 9B-9 override false waives review
 PASS 9B-9 a task without a runtime row is not a Content OS task (requires_review is null)
 PASS 9B-9 published step config cannot be patched afterwards (55000 steps of a published workflow template version are immutable)
@@ -177,32 +177,54 @@ PASS recreate after rollback (same database, existing operational data)
 === 5. second independent fresh apply + full test run (db dryrun_b)
 PASS lines on dryrun_b: 127, FAIL/ERROR lines: 0
 
-=== 5b. REFERENCE Task Bot transition function (docs/persistence/reference) against drafts 00..06 (db dryrun_c)
-PASS reference function before the Content OS schema: legacy transitions work (no content_os_* function is planned)
-PASS REF Blog direct DONE refused for a non-assignee
-PASS REF Blog IN_PROGRESS -> DONE by its assignee (not review-required)
-PASS REF unrelated member cannot send the Blog back
-PASS REF Blog author cannot send their own Blog back
-PASS REF the Head Review assignee sends the SAME Blog DONE -> REVISION
-PASS REF REVISION_REQUESTED event records the deciding Head Review (reviewTaskId)
-PASS REF task_revisions row appended
-PASS REF Head Review cannot complete while its Blog is in REVISION
-PASS REF corrected Blog REVISION -> DONE by its assignee (same task)
-PASS REF the active Head may also decide
-PASS REF second correction
-PASS REF the SAME Head Review completes once its Blog is DONE
-PASS REF a completed Head Review cannot reopen the Blog
-PASS REF a DONE Research task cannot be sent to REVISION (even by Head)
-PASS REF a DONE SEO task (same source + Blog) cannot be sent to REVISION
-PASS REF a DONE Blog without its own Head Review cannot be sent to REVISION
-PASS REF a review-required Content OS task cannot complete directly
-PASS REF ...it completes via REVIEW -> DONE
-PASS REF legacy task: IN_PROGRESS -> DONE still refused
-PASS REF legacy task: REVIEW -> DONE unchanged
-PASS REF legacy task: DONE -> REVISION still refused
-PASS REF legacy events carry no reviewTaskId
-ALL REFERENCE TRANSITION TESTS PASSED
-PASS after Content OS rollback the reference function still runs legacy transitions (REOPEN DONE -> ASSIGNED)
+=== 5b. FINAL Task Bot transition function (Codex, read-only via git show) against drafts 00..06 (db dryrun_c)
+Task Bot function: codex/sprint-9b-hardening @ a9ed78a supabase/migrations/20261014130332_content_os_task_transition_compatibility.sql (md5 a7e82ae39f78076c4446de0607a2e1fc)
+PASS Task Bot function before the Content OS schema: legacy transitions work (no content_os_* function is planned)
+PASS TB the Head Review starts IN_PROGRESS (autostart)
+PASS TB Blog direct DONE refused for a non-assignee
+PASS TB Blog IN_PROGRESS -> DONE by its assignee (not review-required)
+PASS TB unrelated member cannot send the Blog back
+PASS TB Blog author cannot send their own Blog back
+PASS TB the Head Review assignee sends the SAME Blog DONE -> REVISION
+PASS TB revision atomically parks the SAME Head Review IN_PROGRESS -> BLOCKED
+PASS TB parked review carries the blocked reason
+PASS TB REVISION_REQUESTED event records the deciding Head Review (reviewTaskId)
+PASS TB coupled TASK_BLOCKED event on the review (sourceTaskId, coupledContentOsTransition)
+PASS TB task_revisions row appended
+PASS TB a BLOCKED Head Review cannot complete
+PASS TB only the Blog assignee resubmits
+PASS TB corrected Blog REVISION -> DONE by its assignee (same task)
+PASS TB resubmission atomically restores the SAME Head Review BLOCKED -> ASSIGNED
+PASS TB blocked reason cleared, coupled TASK_UNBLOCKED event
+PASS TB a retried resubmission returns OK
+PASS TB ...and is a no-op (no extra event)
+PASS TB an ASSIGNED Head Review must be accepted before deciding
+PASS TB no revision while the review is ASSIGNED (not yet accepted)
+PASS TB ...the Blog stays DONE
+PASS TB reviewer accepts the SAME Head Review ASSIGNED -> IN_PROGRESS
+PASS TB second cycle: the active Head decides
+PASS TB ...the SAME review is parked again
+PASS TB second correction
+PASS TB ...restores the SAME review again
+PASS TB still exactly one Head Review for the Blog
+PASS TB the SAME Head Review is accepted and approved (DONE)
+PASS TB a completed Head Review cannot reopen the Blog
+PASS TB pair 3: Blog DONE -> REVISION
+PASS TB pair 3: review resumed out of band and sent to REVIEW (legacy paths)
+PASS TB REVIEW -> DONE of a Head Review is refused while its Blog is in REVISION
+PASS TB resubmission refuses when the parked review is not BLOCKED
+PASS TB ...nothing half-applied
+PASS TB a DONE Research task cannot be sent to REVISION (even by Head)
+PASS TB a DONE SEO task (same source + Blog) cannot be sent to REVISION
+PASS TB a DONE Blog without its own Head Review cannot be sent to REVISION
+PASS TB a review-required Content OS task cannot complete directly
+PASS TB ...it completes via REVIEW -> DONE
+PASS TB legacy task: IN_PROGRESS -> DONE still refused
+PASS TB legacy task: REVIEW -> DONE unchanged
+PASS TB legacy task: DONE -> REVISION still refused
+PASS TB legacy events carry no reviewTaskId
+ALL TASK BOT TRANSITION TESTS PASSED
+PASS after Content OS rollback the Task Bot function still runs legacy transitions (REOPEN DONE -> ASSIGNED)
 
 === 6. task-bot repo untouched
 task-bot migrations md5 after: 940438a9e036cf02d1ccacfc23972333, dirty files: 0
