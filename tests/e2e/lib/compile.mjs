@@ -11,7 +11,7 @@ export function compilePersistence() {
   symlinkSync(new URL("../../../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir");
   const compile = (from, to) => writeFileSync(to, ts.transpileModule(readFileSync(new URL(from, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
   compile("../../../lib/content-entity.ts", join(dir, "content-entity.js"));
-  for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "actor-resolver", "blog-review-flow", "config", "blog-review-api", "index"]) {
+  for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "blog-review-flow", "config", "blog-review-api", "index"]) {
     compile(`../../../lib/persistence/${name}.ts`, join(dir, "persistence", `${name}.js`));
   }
   const require = createRequire(import.meta.url);

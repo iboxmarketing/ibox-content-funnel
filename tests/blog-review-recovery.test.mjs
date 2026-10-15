@@ -18,7 +18,7 @@ mkdirSync(join(dir, "persistence"));
 symlinkSync(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir"); // zod for blog-review-api
 const compile = (from, to) => writeFileSync(to, ts.transpileModule(readFileSync(new URL(from, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 compile("../lib/content-entity.ts", join(dir, "content-entity.js"));
-for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "actor-resolver", "blog-review-flow", "config", "blog-review-api"]) {
+for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "blog-review-flow", "config", "blog-review-api"]) {
   compile(`../lib/persistence/${name}.ts`, join(dir, "persistence", `${name}.js`));
 }
 const require = createRequire(import.meta.url);
@@ -27,7 +27,6 @@ const { BlogReviewFlow } = require(join(dir, "persistence", "blog-review-flow.js
 const { PersistenceConflictError } = require(join(dir, "persistence", "ports.js"));
 const { handleBlogReviewRequest } = require(join(dir, "persistence", "blog-review-api.js"));
 const { resolveContentOsPersistenceConfig } = require(join(dir, "persistence", "config.js"));
-const { FailClosedActorResolver, SupabaseExternalActorResolver } = require(join(dir, "persistence", "actor-resolver.js"));
 const { PostgrestClient } = require(join(dir, "persistence", "supabase-adapter.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -262,19 +261,15 @@ test("config: disabled by default; explicit and complete or it throws; https onl
   assert.deepEqual(resolveContentOsPersistenceConfig(full), { supabaseUrl: "https://x.supabase.co", serviceRoleKey: "k" });
 });
 
-test("actor resolution: exactly one ACTIVE link to an ACTIVE user, or fail closed", async () => {
-  await assert.rejects(() => new FailClosedActorResolver().resolve("anyone"), (e) => e.code === "EXTERNAL_IDENTITY_NOT_LINKED");
-  const resolverWith = (responses) => {
-    const calls = [];
-    const fetch = async (url) => { calls.push(url); const next = responses.shift(); return { ok: true, status: 200, text: async () => JSON.stringify(next) }; };
-    return { resolver: new SupabaseExternalActorResolver(new PostgrestClient({ baseUrl: "https://x.supabase.co", serviceRoleKey: "k", fetch }), "tenant-1"), calls };
-  };
-  const ok = resolverWith([[{ user_id: AUTHOR }], [{ id: AUTHOR, is_active: true }]]);
-  assert.equal(await ok.resolver.resolve("siwc-author"), AUTHOR);
-  assert.match(ok.calls[0], /external_identity_links\?select=user_id&provider=eq\.OPENAI_SIWC&tenant_key=eq\.tenant-1&external_subject=eq\.siwc-author&status=eq\.ACTIVE/);
-  await assert.rejects(() => resolverWith([[{ user_id: AUTHOR }], [{ id: AUTHOR, is_active: false }]]).resolver.resolve("siwc-author"), /not active/);
-  await assert.rejects(() => resolverWith([[]]).resolver.resolve("siwc-author"), (e) => e.code === "EXTERNAL_IDENTITY_NOT_LINKED");
-  await assert.rejects(() => resolverWith([[{ user_id: AUTHOR }, { user_id: OTHER }]]).resolver.resolve("siwc-author"), (e) => e.code === "EXTERNAL_IDENTITY_NOT_LINKED");
+test("10D: the Sites/SIWC identity path is gone — forged oai-authenticated-* headers cannot reach any actor", () => {
+  for (const removed of ["../app/chatgpt-auth.ts", "../lib/persistence/actor-resolver.ts", "../build/sites-vite-plugin.ts"]) {
+    assert.throws(() => readFileSync(new URL(removed, import.meta.url)), /ENOENT/, removed);
+  }
+  const sources = readdirSync(new URL("../", import.meta.url), { recursive: true })
+    .filter((f) => /^(app|lib|components)\//.test(f) && /\.(tsx?|mjs)$/.test(f));
+  for (const file of sources) {
+    assert.doesNotMatch(readFileSync(new URL(`../${file}`, import.meta.url), "utf8"), /oai-authenticated|getChatGPTUser|OPENAI_SIWC|CONTENT_OS_IDENTITY_TRUST|actor-resolver/, file);
+  }
 });
 
 test("server/client boundary: only the route touches env; no client code can reach persistence or the service-role key", () => {

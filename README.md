@@ -2,7 +2,7 @@
 
 IBOX Content OS is a Vinext/Next.js application built for a standalone Cloudflare Worker. The V1 production hostname may use `workers.dev`; a custom domain is deferred.
 
-Production authentication uses the existing Telegram Task Bot and the canonical Task Bot database RPCs. It does not trust OpenAI Sites identity headers, `OPENAI_SIWC`, Sites Dispatch, or `CONTENT_OS_IDENTITY_TRUST`. The old Sites scaffold remains only as isolated preview/demo material and is not imported by the production build path.
+Production authentication uses the existing Telegram Task Bot and the canonical Task Bot database RPCs. It does not trust OpenAI Sites identity headers, `OPENAI_SIWC`, Sites Dispatch, or `CONTENT_OS_IDENTITY_TRUST`. The Sites identity helpers (`app/chatgpt-auth.ts`, the SIWC actor resolver, the Sites mock-auth Vite plugin) were removed in Sprint 10D; nothing in the repository reads `oai-authenticated-*` headers.
 
 ## Local commands
 

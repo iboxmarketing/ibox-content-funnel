@@ -13,7 +13,6 @@ import { mintKey, startGateway } from "./lib/gateway.mjs";
 const UPSTREAM = process.env.PGRST_UPSTREAM ?? "http://172.17.0.2:3000";
 const { load, cleanup } = compilePersistence();
 const { PostgrestClient, PostgrestError, SupabaseContentOsStore, SupabaseOperationalTaskGateway } = load("supabase-adapter");
-const { SupabaseExternalActorResolver } = load("actor-resolver");
 const { PersistenceConflictError } = load("ports");
 const SERVICE = mintKey("service_role");
 const ANON = mintKey("anon");
@@ -124,19 +123,4 @@ test("a Task Bot 40001 refusal returns promptly and leaves no stuck transaction"
   const stuck = () => Number(sql("select count(*) from pg_stat_activity where usename = 'authenticator' and state <> 'idle' and query not like 'LISTEN%'"));
   assert.equal(stuck(), 0);
   assert.equal(status(taskId), "IN_PROGRESS");
-});
-
-test("external identity resolution over HTTP: provider + tenant + ACTIVE link + active user; URL-encoded subjects", async () => {
-  const resolver = new SupabaseExternalActorResolver(db, "site-e2e");
-  assert.equal(await resolver.resolve("siwc-author"), ids.author);
-  assert.equal(await resolver.resolve("siwc-head"), ids.head);
-  assert.equal(await resolver.resolve("siwc/odd,subject (x)&y=z"), ids.other, "reserved characters survive URL encoding");
-  for (const subject of ["siwc-unknown", "siwc-revoked", "siwc-other-tenant", "siwc-former", "SIWC-AUTHOR", " siwc-author", "siwc-author*", "*"]) {
-    await assert.rejects(() => resolver.resolve(subject), (e) => e.code === "EXTERNAL_IDENTITY_NOT_LINKED", subject);
-  }
-  assert.equal(await new SupabaseExternalActorResolver(db, "site-other").resolve("siwc-other-tenant"), ids.other, "the same subject resolves only in its own tenant");
-  await assert.rejects(() => new SupabaseExternalActorResolver(db, "site-e2e").resolve(""), (e) => e.code === "EXTERNAL_IDENTITY_NOT_LINKED");
-  // Wrong provider cannot even be stored (CHECK provider = 'OPENAI_SIWC'); the resolver also filters by it.
-  assert.throws(() => sql(`insert into public.external_identity_links (provider, tenant_key, external_subject, user_id, linked_by) values ('OTHER_IDP', 'site-e2e', 'x', '${ids.other}', '${ids.head}')`), /check constraint/);
-  assert.match(gw.log.filter((e) => e.path === "/rest/v1/external_identity_links").at(-1).query, /provider=eq\.OPENAI_SIWC/);
 });
