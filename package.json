@@ -49,6 +49,7 @@
     "test:head-review": "node --test tests/head-review.test.mjs",
     "test:persistence-adapter": "node --test tests/persistence-adapter.test.mjs",
     "test:blog-review-lineage": "node --test tests/blog-review-lineage.test.mjs",
+    "test:blog-review-recovery": "node --test tests/blog-review-recovery.test.mjs",
     "test:material-production": "node --test tests/material-production.test.mjs",
     "test:task-runtime-handlers": "node --test tests/task-runtime-handlers.test.mjs"
   },

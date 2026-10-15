@@ -6,7 +6,11 @@
  * an explicit, reviewed configuration through `createSupabaseContentOsPersistence`.
  */
 import { PersistenceNotConfiguredError, type ContentOsStore, type OperationalTaskGateway } from "./ports";
-import { PostgrestClient, SupabaseContentOsStore, SupabaseOperationalTaskGateway, type PostgrestConfig } from "./supabase-adapter";
+import { PostgrestClient, SupabaseContentOsStore, SupabaseOperationalTaskGateway, type FetchLike, type PostgrestConfig } from "./supabase-adapter";
+import { SupabaseExternalActorResolver } from "./actor-resolver";
+import { BlogReviewFlow } from "./blog-review-flow";
+import type { BlogReviewDependencies } from "./blog-review-api";
+import type { ContentOsPersistenceConfig } from "./config";
 
 export interface ContentOsPersistence {
   readonly store: ContentOsStore;
@@ -29,4 +33,17 @@ export function getContentOsPersistence(): ContentOsPersistence {
 export function createSupabaseContentOsPersistence(config: PostgrestConfig): ContentOsPersistence {
   const db = new PostgrestClient(config);
   return { store: new SupabaseContentOsStore(db), tasks: new SupabaseOperationalTaskGateway(db) };
+}
+
+/**
+ * Server-side dependencies for the persisted Blog review slice, from an
+ * explicit resolved config (lib/persistence/config.ts). null = fail closed.
+ */
+export function createBlogReviewDependencies(config: ContentOsPersistenceConfig | null, fetch: FetchLike): BlogReviewDependencies | null {
+  if (!config) return null;
+  const db = new PostgrestClient({ baseUrl: config.supabaseUrl, serviceRoleKey: config.serviceRoleKey, fetch });
+  return {
+    flow: new BlogReviewFlow(new SupabaseContentOsStore(db), new SupabaseOperationalTaskGateway(db)),
+    actors: new SupabaseExternalActorResolver(db, config.identityTenantKey),
+  };
 }

@@ -16,7 +16,7 @@ const dir = mkdtempSync(join(tmpdir(), "ibox-persistence-adapter-"));
 mkdirSync(join(dir, "persistence"));
 const compile = (from, to) => writeFileSync(to, ts.transpileModule(readFileSync(new URL(from, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 for (const name of ["content-entity", "task-type", "task-type-fixtures"]) compile(`../lib/${name}.ts`, join(dir, `${name}.js`));
-for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "index"]) {
+for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "actor-resolver", "blog-review-flow", "config", "blog-review-api", "index"]) {
   compile(`../lib/persistence/${name}.ts`, join(dir, "persistence", `${name}.js`));
 }
 const require = createRequire(import.meta.url);
