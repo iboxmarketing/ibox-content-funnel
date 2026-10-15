@@ -276,14 +276,21 @@ an action (`HEAD_REVIEW_MISSING`) instead of creating one. Idempotent.
   None of these is `NEXT_PUBLIC_*`; the client bundle has no reference to
   them (checked after build; test `blog-review-recovery`).
 - The **actor is never taken from the request body** (strict schema rejects
-  unknown keys). It is the platform-authenticated SIWC subject resolved via
+  unknown keys). It is the platform-supplied SIWC subject (an **unsigned**
+  header — see §10 for the trust contract this depends on) resolved via
   `external_identity_links` (`OPENAI_SIWC`, tenant key) to exactly one
   ACTIVE link of an ACTIVE `public.users` row; otherwise 401/403.
 - Writes happen only server-side; the demo/session path (no persistence)
   is unchanged and remains the default. No component imports
   `lib/persistence`.
 - Error mapping: rule/conflict → 409, Task Bot `42501` → 403, `40001` /
-  `23505` / `23514` → 409, unexpected → 500 without details.
+  `23505` / `23514` / `22023` / `55000` → 409, database API unreachable /
+  timeout / gateway 5xx → 503 `PERSISTENCE_TRANSPORT_FAILURE`
+  (`retryable: true`), unexpected → 500 without details.
+- Request hygiene (Sprint 9D, §11): POST only, `application/json` only
+  (415), body ≤ 16 KiB (413), cross-site / same-site browser requests
+  refused (403, Fetch Metadata + Origin), no CORS grant, 10 s timeout per
+  database API call.
 
 ## 7. Concurrency (`field_values` read-modify-write)
 
@@ -316,7 +323,105 @@ field becomes authoritative.
 - Other Head Review consumers (SEO/Angle/PC tasks) and the generic
   `field_values` concurrency fix are out of scope.
 
-## 9. Evidence
+## 10. Identity trust contract (Sprint 9D audit) — release blocker
+
+**Where the actor comes from.** `app/chatgpt-auth.ts` `getChatGPTUser()`
+reads `oai-authenticated-user-id` (+ `-email`) from the incoming request.
+Per the project README the hosting dispatcher ("Dispatch owns
+`/signin-with-chatgpt`, `/callback`, the OAuth cookies, and identity header
+injection") sets these headers after its own SIWC sign-in. In local dev the
+vendored `build/sites-vite-plugin.ts` strips client-supplied
+`oai-authenticated-user-*` headers and injects a mock user; `npm start` and
+production have no such code in this repo.
+
+**What the app verifies: nothing cryptographic.** The headers are plain
+strings: no signature, no JWT, no issuer/audience/tenant claim. `OPENAI_SIWC`
+and the tenant key are labels on `external_identity_links` rows, chosen by
+Content OS config, not facts asserted by the request. Proven against the
+built Worker: a direct request carrying `oai-authenticated-user-id:
+siwc-head` acts as the Head (`tests/e2e/blog-review-route.e2e.mjs`,
+"identity header is not verified by the app").
+
+So the route is safe **only if** the platform guarantees, for every request
+that can reach this Worker (including `/api/*`):
+
+1. the dispatcher removes/overwrites any client-supplied
+   `oai-authenticated-user-*` header before the Worker sees it;
+2. the Worker has no other ingress (no `workers.dev` route, custom domain,
+   service binding or preview URL that bypasses the dispatcher);
+3. `oai-authenticated-user-id` is stable per user **per Site**, so the
+   Site/project id is the correct `CONTENT_OS_IDENTITY_TENANT_KEY`;
+4. which browser cookies authenticate the request and their `SameSite`
+   policy (input to §11).
+
+None of these is stated as a guarantee in this repo, and the app cannot
+check them. Required before release: a written platform statement (or a
+signed identity assertion the server can verify, e.g. a JWT with a
+published key). No verification was invented here.
+
+**External identity mapping (verified over real PostgREST + E2E).** Actor
+resolution requires provider `OPENAI_SIWC` (also a CHECK on the table),
+the configured tenant, exactly one `ACTIVE` link (partial unique index; a
+`REVOKED` row never matches), an active `public.users` row, and exact
+subject equality (case, whitespace and `*` do not match; reserved URL
+characters are encoded correctly). Anonymous → 401; unknown, revoked,
+other-tenant, inactive-user → 403; Head, reviewer, author resolve; no body
+field selects the actor (strict schema → 400).
+
+## 11. Request security, logging, and the 40001 hazard (Sprint 9D)
+
+**CSRF.** Identity rides on ambient platform cookies, so a third-party page
+could make a signed-in browser POST here. Defenses that match this model:
+`application/json` only (a cross-origin JSON POST needs a CORS preflight,
+which the route never grants), `Sec-Fetch-Site` must be `same-origin` /
+absent (`same-site` is refused too: other Sites may share the parent
+domain), and a present `Origin` must equal the request host. Non-browser
+clients send no Fetch Metadata and still need the platform identity.
+
+**Logging.** One JSON line per request (`event: content_os.blog_review`)
+with `action`, `outcome` (`ok`, `not_configured`, `unauthenticated`,
+`invalid_input`, `actor_not_linked`, `content_os_rule`,
+`content_os_conflict`, `task_bot_rejected` + `sqlState`,
+`transport_failure`, `internal_error`), HTTP status, code, the resolved
+internal `actorId`, and idempotency results (`created`,
+`headReviewCreated`, `reconcileActions`). Never: headers, key, external
+subject, request body. Verified in the Worker's real output.
+
+**HAZARD — Task Bot owned, not fixed here.** The Task Bot reports refused
+transitions (and several other business refusals) as SQLSTATE `40001`.
+PostgREST 11.2.2, 12.0.3, 12.2.3 and 13.0.0 (all tested locally) treat
+`40001` as a serialization failure and **retry the transaction without
+limit**: the HTTP request never answers, the loop continues after the
+client disconnects (> 2,000 rollbacks/s observed), and each such request
+pins a PostgREST pool connection. The Task Bot itself calls
+`transition_task_with_events` through supabase-js, i.e. PostgREST. Content
+OS mitigation (this sprint): every Task Bot transition is pre-validated
+with the same rules and only sent when it will be accepted, plus a 10 s
+client timeout. Residual: a genuine race between two different decisions
+(e.g. approve vs. revision at the same moment) can still trigger it.
+Owner action: use a non-retryable SQLSTATE for business refusals (e.g.
+`P0001`/custom class) and confirm the live PostgREST version's behaviour
+(read-only), before releasing any caller that can send refusable
+transitions.
+
+**PostgREST compatibility (verified against real PostgREST 12.2.3 via a
+local Supabase-gateway emulator).** `/rest/v1` prefix, `apikey` +
+`Authorization: Bearer` with a JWT-format `service_role` key (anon key →
+401 / `42501`), JSON bodies, `Prefer: resolution=ignore-duplicates,
+return=minimal` (targets the PRIMARY KEY, so the partial one-PRIMARY index
+raises `23505` → 409; same-key/different-relation is caught by the
+read-back), RPC argument names, `returns table` and composite results,
+UUID / `timestamptz` / JSONB round-trips, empty results → null, write-once
+provenance (`55000`), idempotency-key reuse (`23505` → 409). Not verified:
+Supabase's newer non-JWT `sb_secret_…` keys (the adapter sends the key as
+both `apikey` and Bearer, which matches the legacy JWT keys).
+
+**S6 (legacy hierarchy).** The slice reads a Knowledge Node by id and never
+uses its parent part, so it does not depend on the S6 answer. It does
+require Knowledge Node rows to exist in production (B1 apply + a
+population path; the Sheet import B7 waits for S6).
+
+## 12. Evidence
 
 `supabase/content-os-drafts/dry-run/run-dry-run.sh` on disposable
 PostgreSQL 17.11 (`DRY_RUN_EVIDENCE.log`): Sprint 8 contract suite +
@@ -328,3 +433,8 @@ all-or-nothing resubmission (section 5b); Task Bot fingerprint unchanged;
 privilege stripping verified; rollback removes all Content OS objects incl.
 the 06 functions. Unit tests: `tests/blog-review-lineage.test.mjs`,
 `tests/blog-review-recovery.test.mjs`, `tests/persistence-adapter.test.mjs`.
+Sprint 9D, local only (`npm run test:e2e:setup && npm run build && npm run
+test:e2e`): `tests/e2e/postgrest-adapter.e2e.mjs` (real PostgREST) and
+`tests/e2e/blog-review-route.e2e.mjs` (the built Worker under local
+workerd → TLS gateway emulator → PostgREST 12.2.3 → PostgreSQL 17 with the
+final Task Bot migrations at `a9ed78a` + drafts 00..06).
