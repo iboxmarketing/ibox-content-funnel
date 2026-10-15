@@ -202,3 +202,42 @@ test("classifier: persisted provenance (runtime row + pinned code + lineage), ne
   assert.ok(queries.every(([, filters]) => !Object.keys(filters).includes("title")));
   await assert.rejects(() => new SupabaseWorkflowClassifier({ select: async () => { throw new Error("down"); } }).classify([BLOG]), /down/, "fails closed");
 });
+
+// --- Sprint 10E-FIX: final owner decision — assigned-reviewer-only approval -----------------------
+
+test("10E review matrix (server capabilities): approval only by the assigned reviewer; the Blog author never decides, Head included", async () => {
+  const w = world();
+  const hr = w.tasks.get(HR);
+  const cls = (blogAuthorId, sourceStatus = "DONE") => ({ kind: "CONTENT_OS", code: "HEAD_REVIEW", sourceTaskId: BLOG, blogAuthorId, sourceStatus, reviewerId: null });
+  const caps = (actor, { assignee = REVIEWER.id, author = AUTHOR.id, status = "IN_PROGRESS" } = {}) =>
+    computeTaskCapabilities(actor, { ...hr, assigneeId: assignee, status }, false, cls(author), { workflowApiEnabled: true });
+
+  // Ordinary Blog author: nothing.
+  assert.deepEqual(caps(AUTHOR).workflowActions, []);
+  assert.deepEqual([caps(AUTHOR).canDirectReassign, caps(AUTHOR).canEdit, caps(AUTHOR).lifecycleActions], [false, false, []], "no creator controls on the Head Review");
+  // Assigned reviewer: pick-up (inside approve/revision), revision, approve.
+  assert.deepEqual(caps(REVIEWER).workflowActions, ["REVIEW_APPROVE", "REVIEW_REQUEST_REVISION"]);
+  assert.deepEqual(caps(REVIEWER, { status: "ASSIGNED" }).workflowActions, ["REVIEW_APPROVE", "REVIEW_REQUEST_REVISION"]);
+  // Head, not author, not assigned: supervisory revision + reassignment, NO approval.
+  assert.deepEqual(caps(HEAD).workflowActions, ["REVIEW_REQUEST_REVISION"]);
+  assert.equal(caps(HEAD).canDirectReassign, true);
+  assert.deepEqual(caps(HEAD).forbiddenAssigneeIds, [AUTHOR.id], "Head can reassign, never to the author");
+  // Head, not author, IS the assigned reviewer: may approve.
+  assert.deepEqual(caps(HEAD, { assignee: HEAD.id }).workflowActions, ["REVIEW_APPROVE", "REVIEW_REQUEST_REVISION"]);
+  // Head who wrote the Blog: may assign another reviewer, may not review / approve / request revision.
+  const headAuthor = caps(HEAD, { author: HEAD.id });
+  assert.deepEqual(headAuthor.workflowActions, []);
+  assert.equal(headAuthor.canDirectReassign, true, "administrative reassignment stays");
+  assert.deepEqual(headAuthor.forbiddenAssigneeIds, [HEAD.id], "…but never to themselves");
+  assert.deepEqual(caps(HEAD, { author: HEAD.id, assignee: HEAD.id }).workflowActions, [], "even a (legacy) self-assigned Head-author decides nothing");
+  // Other user: read only.
+  assert.deepEqual([caps(OTHER).workflowActions, caps(OTHER).canEdit, caps(OTHER).canDirectReassign, caps(OTHER).lifecycleActions], [[], false, false, []]);
+});
+
+test("10E review matrix (API): Head-author cannot hand the review to themselves; Head may hand it to an independent reviewer", async () => {
+  const w = world();
+  w.tasks.set(BLOG, { ...w.tasks.get(BLOG), assigneeId: HEAD.id, status: "DONE" });
+  await refused(w, { action: "direct-reassign", taskId: HR, assigneeId: HEAD.id }, HEAD, 409, "WORKFLOW_INDEPENDENCE");
+  assert.deepEqual(await forwarded(w, { action: "direct-reassign", taskId: HR, assigneeId: OTHER.id }, HEAD), ["directReassign", HR, OTHER.id]);
+  await refused(w, { action: "lifecycle", taskId: HR, taskAction: "APPROVE" }, HEAD, 409, "WORKFLOW_TASK");
+});

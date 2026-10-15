@@ -42,8 +42,25 @@ body field can name an actor or creator.
 - Nobody (Head included) can directly reassign a Head Review to the Blog's
   author, approve a reassignment request that would, or reassign a Blog to
   its own reviewer (`409 WORKFLOW_INDEPENDENCE`).
-- Only the Head Review's assignee approves; the assignee or Head (when not
-  the author) may send the Blog back for revision.
+- **Final review policy (owner decision, Sprint 10E-FIX):** only the active
+  **assigned reviewer** approves. Head has no automatic approval right — Head
+  approves only while Head is the review's current assignee. The reviewer is
+  never the Blog's author, even when the author is Head.
+
+  | Actor | Pick up | Request revision | Approve | Reassign the review |
+  |---|---|---|---|---|
+  | Assigned reviewer (not the author) | yes | yes | yes | — |
+  | Head, not the author, not assigned | — | yes (supervisory) | **no** | yes (never to the author) |
+  | Head, not the author, assigned | yes | yes | yes | yes |
+  | Head who wrote the Blog | — | **no** | **no** | yes, to another valid reviewer only |
+  | Ordinary Blog author | — | no | no | no |
+  | Any other member | — | no | no | no (read only) |
+
+  Content OS enforces this in the server capability policy and in
+  `BlogReviewFlow` (the UI renders only server capabilities). The Task Bot
+  database currently still lets an active Head move or complete any Head
+  Review and lets a Head-author be chosen as reviewer; Codex is aligning the
+  Task Bot with this decision.
 
 ## 3. Blog completion invariant
 

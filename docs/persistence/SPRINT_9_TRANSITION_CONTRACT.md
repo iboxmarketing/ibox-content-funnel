@@ -239,9 +239,11 @@ on the Blog, and the Task Bot moves the coupled review in the same
 transaction. So the review can never be left `IN_PROGRESS` while its Blog is
 in REVISION, nor `BLOCKED` after the Blog is DONE again. The Sprint 9B
 "stays IN_PROGRESS while waiting" model is withdrawn. Decision rules
-(`lib/persistence/blog-review-flow.ts`): a decision is made by the active
-Head Review assignee or the active Head; only the assignee completes the
-review (the Task Bot's direct-DONE rule); the Blog author cannot decide.
+(`lib/persistence/blog-review-flow.ts`, final owner decision Sprint 10E-FIX):
+only the active assigned reviewer approves (Head only while assigned); the
+assigned reviewer or a Head who is not the Blog's author may request a
+revision; the Blog's author — Head included — never reviews, approves, or
+requests revision. See `docs/SPRINT_10D_SECURITY_RULES.md` §2.
 
 ## 5. Orchestration, retries and reconciliation
 

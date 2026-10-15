@@ -38,7 +38,7 @@ The detail view shows creator, assignee, status, priority, deadline, context, ch
 
 Relationship behavior:
 
-- Head: direct edit/reassign/deadline, review/cancel/reopen where the Task Bot state machine allows, request resolution, archive, and restore.
+- Head: direct edit/reassign/deadline, review/cancel/reopen where the Task Bot state machine allows, request resolution, archive, and restore. Content OS workflow tasks are the exception: a Head Review is approved only by its assigned reviewer (Head only while assigned, never for a Blog Head wrote) — see `docs/SPRINT_10D_SECURITY_RULES.md` §2.
 - Creator: edit permitted content, direct reassign/deadline, review and cancel where allowed.
 - Assignee: assignee workflow transitions and deadline/reassign requests.
 - Unrelated team member: read only.

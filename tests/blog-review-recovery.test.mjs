@@ -407,3 +407,37 @@ test("10E: the whole Blog lifecycle never sends a generic Blog DONE — completi
   assert.equal(sent.filter(([m]) => m === "completeBlogWithHeadReview").length, 2, "first completion + resubmission");
   assert.equal(sent.filter(([m, input]) => m === "createTaskIdempotent" && input.idempotencyKey.startsWith("head-review:")).length, 0, "Content OS never creates the review itself");
 });
+
+// --- Sprint 10E-FIX: final owner decision at the workflow layer ---------------------------------
+
+test("10E review matrix (BlogReviewFlow): assigned reviewer approves; Head approves only when assigned; authors never decide", async () => {
+  // Ordinary author.
+  let w = world();
+  let { blogTaskId } = await start(w);
+  let { headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId);
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: AUTHOR }), /author cannot decide/);
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: AUTHOR, note: "x" }), /author cannot decide/);
+  // Head, not author, not assigned: supervisory revision allowed, approval refused.
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: HEAD }), /only the Head Review assignee/);
+  const revised = await w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "Supervisory: tighten the intro" });
+  assert.deepEqual([revised.blogStatus, revised.headReviewStatus], ["REVISION", "BLOCKED"]);
+  await complete(w, blogTaskId);
+  // Assigned reviewer approves.
+  assert.equal((await w.flow.approve({ reviewTaskId, actorId: REVIEWER })).headReviewStatus, "DONE");
+
+  // Head who is the CURRENT assignee (not author) may approve.
+  w = world();
+  ({ blogTaskId } = await start(w, "head-assigned"));
+  ({ headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId, HEAD));
+  assert.equal((await w.flow.approve({ reviewTaskId, actorId: HEAD })).headReviewStatus, "DONE");
+
+  // Head-author: cannot be reviewer, cannot approve, cannot request revision.
+  w = world();
+  ({ blogTaskId } = await w.flow.startBlog({ requestKey: "head-author", knowledgeNodeId: NODE, blogTitle: "Head's own", creatorId: HEAD, assigneeId: HEAD, deadline: DEADLINE }));
+  await assert.rejects(() => w.flow.completeBlog({ blogTaskId, actorId: HEAD, reviewerId: HEAD, reviewDeadline: DEADLINE }), /author cannot review their own Blog/, "reviewer != author even for Head");
+  assert.equal((await w.tasks.getTask(blogTaskId)).status, "IN_PROGRESS");
+  ({ headReviewTaskId: reviewTaskId } = await w.flow.completeBlog({ blogTaskId, actorId: HEAD, reviewerId: REVIEWER, reviewDeadline: DEADLINE }));
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: HEAD }), /author cannot decide/);
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "x" }), /author cannot decide/);
+  assert.equal((await w.flow.approve({ reviewTaskId, actorId: REVIEWER })).headReviewStatus, "DONE", "the independent reviewer decides");
+});
