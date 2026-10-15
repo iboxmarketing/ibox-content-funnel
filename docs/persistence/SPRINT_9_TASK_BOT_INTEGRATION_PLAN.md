@@ -125,7 +125,11 @@ applied independently; A2/A3 deploy order per the A2 decision.
 
 ### B1. Apply the Content OS schema
 
-- Apply the drafts in order (`00` … `04`) unchanged unless review finds a
+- **Ownership (Sprint 9E):** the Task Bot repo is the canonical migration
+  owner of the shared database. The Content OS drafts are source/reference
+  and are applied only through the Task Bot manifest; no independent
+  `supabase db push` from Content OS.
+- Apply the drafts in order (`00` … `06`) unchanged unless review finds a
   defect. `05_external_identity_links` only if the owner keeps it in this
   track; otherwise it moves to the task-bot repo and stays disabled.
 - Before/after: live read-only audit + comparator; task-bot objects must be

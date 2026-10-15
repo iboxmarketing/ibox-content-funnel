@@ -421,6 +421,83 @@ uses its parent part, so it does not depend on the S6 answer. It does
 require Knowledge Node rows to exist in production (B1 apply + a
 population path; the Sheet import B7 waits for S6).
 
+## 13. Production identity trust boundary (Sprint 9E)
+
+**Result: neither acceptable release model is proven → APPLICATION_RELEASE
+stays NO-GO.**
+
+Evidence examined (platform documentation, not repository comments):
+
+- OpenAI Sites plugin `openai-curated-remote/sites` 1.0.0 (OWNERS
+  `@openai/sites`), `skills/sites/references/identity-and-secrets.md`:
+  "Signed-in visitors receive `oai-authenticated-user-id` and
+  `oai-authenticated-user-email`. The ID is stable within a Site and differs
+  across Sites"; "Private Sites require authenticated access"; "Dispatch
+  owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, and `/callback`";
+  "Sites owns hosted authentication; preserve its integration instead of
+  scaffolding a separate OAuth or session stack". Service access uses
+  `OAI-Sites-Authorization: Bearer …`, which "Dispatch validates and
+  consumes; it supplies neither a visitor identity …".
+- Its starter `build/sites-worker.ts` / `app-integrations.md`: the
+  dispatcher passes **connector capabilities** through Cloudflare
+  `ctx.props` (unforgeable by HTTP clients). Identity is **not** passed
+  that way — only as plain request headers.
+- Deployment: this repo has no Worker routes, `workers_dev`, custom domain
+  or deploy script (`dist/server/wrangler.json` declares none); publishing
+  is done by Sites tools (`save_site_version` / `deploy_site_version`) and
+  the platform owns hostnames and routing.
+- Public Sign in with ChatGPT (developers.openai.com/siwc/website) issues
+  verifiable OIDC ID tokens (issuer `https://auth.openai.com`, JWKS
+  discovery, `aud` = client id, `sub`, `exp`, nonce), but requires a
+  registered OpenAI client (limited partner trial) and its own callback —
+  which the Sites docs reserve for Dispatch. No tenant/workspace claim is
+  documented. Not available to this app today.
+- Third-party report (github.com/ElMolla10/FPL-Edge PR #80): on OpenAI Sites
+  the `oai-*` identity headers are platform-injected; on a plain Cloudflare
+  Worker nothing strips them and they are spoofable. Consistent with this
+  audit, but not a platform guarantee.
+
+Answers: (1) stripping of client-supplied `oai-authenticated-user-*`
+headers — **not documented**; (2) overwriting with the authenticated
+identity — documented for signed-in visitors, not for anonymous requests on
+public Sites; (3) bypass ingress (workers.dev, preview/direct Worker URL,
+custom domain, alternate route) — **not documented**; not configurable from
+this repo; local `npm start`/`wrangler dev` has no dispatcher at all; (4)
+the id is documented stable per Site; (5) the authoritative tenant is the
+Site (`project_id` in `.openai/hosting.json`), but no request field states
+it — it is configuration; (6)/(7) **no signed identity assertion is
+available** to the app.
+
+**What changed (Content OS only).** Enabling persistence now also requires
+`CONTENT_OS_IDENTITY_TRUST=OPENAI_SITES_DISPATCH`, to be set only after the
+platform owner answers the checklist below for this deployment. Without it
+the route returns 503 before reading any identity header or calling the
+database. This is a fail-closed release gate, **not authentication**:
+with it set, the app still acts on whatever `oai-authenticated-user-id`
+reaches it (E2E "DELEGATED TRUST" test).
+
+`OPENAI_SIWC` in `external_identity_links` means: "the Sites
+dispatcher's per-Site `oai-authenticated-user-id`", tenant = the Site's
+`project_id`. It is trustworthy only to the extent the platform answers
+below are "yes". The mapping rules are unchanged (§10).
+
+**Platform-owner checklist (all must be answered "yes", in writing, for
+the Site `appgprj_6aaeb64e7ed88191b9710786438491d2`):**
+
+1. For every request to the Site's Worker, does Dispatch remove any
+   client-supplied `oai-authenticated-user-*` header (including on
+   anonymous requests to public Sites and on `/api/*` POSTs)?
+2. Is Dispatch the only ingress to this Worker — no `workers.dev`, preview,
+   version/alias URL, custom domain, route or service binding that reaches
+   it without Dispatch?
+3. Is the Site private (or will it be), so only signed-in visitors reach it?
+4. Is `oai-authenticated-user-id` stable for the user for the life of this
+   Site (not rotated per deployment/version), and is `project_id` the
+   correct tenant key?
+5. Alternatively: can Dispatch provide a verifiable identity (e.g. signed
+   JWT with issuer, audience = Site, `sub`, `exp`, JWKS) or pass identity
+   through `ctx.props`? If so, Content OS switches to verifying it.
+
 ## 12. Evidence
 
 `supabase/content-os-drafts/dry-run/run-dry-run.sh` on disposable

@@ -1,5 +1,14 @@
 # Content OS persistence — DRAFT migrations (Sprint 8B)
 
+> **Migration ownership (Sprint 9E).** The shared production Supabase
+> database and its migration ledger are owned by the Task Bot repository
+> (`marketing-team-task-bot`), which is the canonical migration manifest.
+> The files under `migrations/` here are **source/reference** for Content
+> OS schema: they reach production only after the Task Bot owner
+> incorporates them into that manifest. Never run `supabase db push` (or
+> any other independent apply) from this repository against the shared
+> database. Files are kept with their current names and numbering.
+
 **Not applied to production. Not applied to any Supabase project.** These
 files exist only to be dry-run on a disposable local PostgreSQL 17.
 
