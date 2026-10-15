@@ -176,7 +176,12 @@ test("the coupled Task Bot change is all-or-nothing: if the parked review is not
   const { headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId);
   await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "Fix intro" });
   w.tasks.tasks.set(reviewTaskId, { ...w.tasks.tasks.get(reviewTaskId), status: "IN_PROGRESS" }); // out-of-band tamper
-  await assert.rejects(() => complete(w, blogTaskId), /Head Review state changed concurrently/);
+  // Content OS refuses before sending (a refused Task Bot transition is 40001, which PostgREST retries without limit)...
+  const sent = w.tasks.transitions.length;
+  await assert.rejects(() => complete(w, blogTaskId), /not waiting for this Blog \(IN_PROGRESS\)/);
+  assert.equal(w.tasks.transitions.length, sent, "no transition was sent");
+  // ...and the Task Bot itself would refuse it atomically anyway.
+  await assert.rejects(() => w.tasks.transition(blogTaskId, AUTHOR, "DONE"), /Head Review state changed concurrently/);
   assert.equal((await w.tasks.getTask(blogTaskId)).status, "REVISION", "nothing half-applied");
 });
 
@@ -197,7 +202,7 @@ test("concurrency: a stale decision write cannot gate anything; reconcile re-der
   await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "Fix intro" });
   // A late write lands out of order (e.g. a delayed retry): the field says "cleared" while the Blog is in REVISION.
   await w.store.mergeFieldValues(reviewTaskId, { "review-decision": null });
-  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /only while its source Blog is DONE/, "gating uses Task Bot state, not the field");
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /a BLOCKED Head Review cannot be approved/, "gating uses Task Bot state, not the field");
   assert.equal((await w.flow.reconcile(blogTaskId)).decision, "Revision requested");
 });
 
@@ -289,4 +294,58 @@ test("server/client boundary: only the route touches env; no client code can rea
     .filter((f) => /\.(tsx?|mjs)$/.test(f) && !f.includes("node_modules") && !f.startsWith("dist") && !f.startsWith(".next"))
     .some((f) => /NEXT_PUBLIC_[A-Z_]*SERVICE_ROLE/.test(readFileSync(new URL(`../${f}`, import.meta.url), "utf8")));
   assert.equal(anyPublicSecret, false, "no NEXT_PUBLIC_* service-role variable anywhere");
+});
+
+// --- Sprint 9D: refuse-before-send, transport classification, structured logs ----------------
+
+test("9D: transitions the Task Bot would refuse (40001 under PostgREST = unbounded retry) are refused before sending", async () => {
+  const w = world();
+  const { blogTaskId } = await start(w);
+  await assert.rejects(() => w.flow.completeBlog({ blogTaskId, actorId: REVIEWER, reviewerId: REVIEWER, reviewDeadline: DEADLINE }), /only the Blog assignee/);
+  const { headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId);
+  w.tasks.tasks.set(reviewTaskId, { ...w.tasks.tasks.get(reviewTaskId), status: "CANCELLED" });
+  const sent = w.tasks.transitions.length;
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /a CANCELLED Head Review cannot be approved/);
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "x" }), /may not send this Blog back/);
+  w.tasks.tasks.set(reviewTaskId, { ...w.tasks.tasks.get(reviewTaskId), status: "BLOCKED" });
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /a BLOCKED Head Review cannot be approved/);
+  w.tasks.tasks.set(reviewTaskId, { ...w.tasks.tasks.get(reviewTaskId), status: "ASSIGNED" });
+  w.tasks.tasks.set(blogTaskId, { ...w.tasks.tasks.get(blogTaskId), status: "REVISION" });
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /only while its source Blog is DONE/);
+  assert.equal(w.tasks.tasks.get(reviewTaskId).status, "ASSIGNED", "the review was not accepted before the refusal");
+  assert.equal(w.tasks.transitions.length, sent, "nothing was sent");
+});
+
+test("9D: PostgREST transport failures are classified (no URL / key in the error)", async () => {
+  const { PersistenceTransportError } = require(join(dir, "persistence", "supabase-adapter.js"));
+  const client = (fetch) => new PostgrestClient({ baseUrl: "https://x.supabase.co", serviceRoleKey: "secret-key-value", fetch });
+  const reply = (status, text) => async () => ({ ok: status < 400, status, text: async () => text });
+  const timeout = async () => { const e = new Error("aborted"); e.name = "TimeoutError"; throw e; };
+  for (const [fetch, status] of [[timeout, null], [reply(502, "<html>bad gateway</html>"), 502], [reply(503, ""), 503]]) {
+    await assert.rejects(() => client(fetch).select("tasks", "id", {}), (e) => e instanceof PersistenceTransportError && e.status === status && !/secret-key-value|supabase\.co/.test(e.message));
+  }
+  await assert.rejects(() => client(reply(500, JSON.stringify({ code: "40001", message: "m" }))).select("tasks", "id", {}), (e) => e.name === "PostgrestError" && e.pgCode === "40001");
+});
+
+test("9D: one structured log record per request, classified, without subject or body", async () => {
+  const { PersistenceTransportError } = require(join(dir, "persistence", "supabase-adapter.js"));
+  const w = apiWorld();
+  const records = [];
+  const log = (r) => records.push(r);
+  const call = (body, who, deps = w.deps) => handleBlogReviewRequest({ body, externalSubject: who }, deps, log);
+  await call({ action: "reconcile", blogTaskId: NODE }, null);
+  await call({ action: "nope" }, "siwc-author");
+  await call({ action: "reconcile", blogTaskId: NODE }, "siwc-stranger");
+  const started = await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, "siwc-author");
+  await call({ action: "start", requestKey: "log-1", knowledgeNodeId: NODE, blogTitle: "Secret title", assigneeId: AUTHOR, deadline: DEADLINE }, "siwc-author");
+  await call({ action: "approve", reviewTaskId: started.body.blogTaskId }, "siwc-reviewer");
+  const down = { flow: { reconcile: async () => { throw new PersistenceTransportError(null, "TimeoutError"); } }, actors: w.deps.actors };
+  const res = await call({ action: "reconcile", blogTaskId: NODE }, "siwc-author", down);
+  assert.deepEqual([res.status, res.body.retryable], [503, true]);
+  const rejected = { flow: { reconcile: async () => { const e = new Error("x"); e.pgCode = "42501"; throw e; } }, actors: w.deps.actors };
+  await call({ action: "reconcile", blogTaskId: NODE }, "siwc-author", rejected);
+  assert.deepEqual(records.map((r) => r.outcome), ["unauthenticated", "invalid_input", "actor_not_linked", "ok", "ok", "content_os_rule", "transport_failure", "task_bot_rejected"]);
+  assert.deepEqual(records.slice(3, 5).map((r) => r.created), [true, false], "idempotent replay is visible");
+  assert.equal(records[7].sqlState, "42501");
+  assert.doesNotMatch(JSON.stringify(records), /siwc-|Secret title/);
 });

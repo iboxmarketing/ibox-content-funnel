@@ -20,6 +20,12 @@
  * current statuses and performs only what is still missing, so a retry
  * after any partial failure converges without creating a task.
  *
+ * Pre-validation rule: a Task Bot transition is sent only when its own rules
+ * will accept it (same predicates, same statuses). The Task Bot reports a
+ * refused transition as SQLSTATE 40001, and PostgREST retries 40001 inside
+ * the request without limit, so a request the Task Bot would refuse must be
+ * refused here (ContentOsRuleError) and never sent.
+ *
  * Only stable ids, codes and lineage are used — never titles or names.
  * Status changes go only through OperationalTaskGateway (Task Bot RPCs);
  * ContentOsStore writes only content_* rows.
@@ -133,6 +139,15 @@ export class BlogReviewFlow {
     let blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
     if (blog.requiresReview) throw new ContentOsRuleError("this Blog task is review-required; it completes through REVIEW, not directly");
     if (blog.task.status === "IN_PROGRESS" || blog.task.status === "REVISION") {
+      if (blog.task.assigneeId !== input.actorId) throw new ContentOsRuleError("only the Blog assignee completes the Blog");
+      if (blog.task.status === "REVISION") {
+        // The Task Bot restores the parked review only if it is still BLOCKED.
+        const parked = await this.findHeadReview(blog.task.id);
+        const parkedTask = parked ? await this.tasks.getTask(parked) : null;
+        if (parkedTask?.status !== "BLOCKED") {
+          throw new ContentOsRuleError(`the Head Review is not waiting for this Blog (${parkedTask?.status ?? "missing"}); it must be BLOCKED before the Blog is resubmitted`);
+        }
+      }
       await this.tasks.transition(blog.task.id, input.actorId, "DONE");
       blog = await this.requireFacts(input.blogTaskId, BLOG_TASK_TYPE_CODE);
     } else if (blog.task.status !== "DONE") {
@@ -160,6 +175,9 @@ export class BlogReviewFlow {
 
     const alreadyApplied = blog.task.status === "REVISION" && review.task.status === "BLOCKED";
     if (!alreadyApplied) {
+      if (blog.task.status !== "DONE" || (review.task.status !== "ASSIGNED" && review.task.status !== "IN_PROGRESS")) {
+        throw new ContentOsRuleError("this Head Review may not send this Blog back for revision now");
+      }
       if (review.task.status === "ASSIGNED") {
         // The reviewer picks the review up again (legacy ACCEPT) before deciding.
         await this.tasks.transition(review.task.id, input.actorId, "IN_PROGRESS");
@@ -182,12 +200,15 @@ export class BlogReviewFlow {
       if (!isReviewAuthority(review, actor) || review.task.assigneeId !== input.actorId) {
         throw new ContentOsRuleError("only the Head Review assignee completes the review");
       }
+      if (!["ASSIGNED", "IN_PROGRESS", "REVIEW"].includes(review.task.status)) {
+        throw new ContentOsRuleError(`a ${review.task.status} Head Review cannot be approved`);
+      }
+      const blog = await loadContentOsTaskFacts(blogTaskId, this.store, this.tasks);
+      if (!completionAllowed(review, blog)) throw new ContentOsRuleError("the Head Review completes only while its source Blog is DONE");
       if (review.task.status === "ASSIGNED") {
         await this.tasks.transition(review.task.id, input.actorId, "IN_PROGRESS");
         review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
       }
-      const blog = await loadContentOsTaskFacts(blogTaskId, this.store, this.tasks);
-      if (!completionAllowed(review, blog)) throw new ContentOsRuleError("the Head Review completes only while its source Blog is DONE");
       await this.tasks.transition(review.task.id, input.actorId, "DONE");
     }
     await this.store.mergeFieldValues(review.task.id, { [HEAD_REVIEW_FIELDS.decision]: HEAD_REVIEW_FIELDS.approve, ...(input.note?.trim() ? { [HEAD_REVIEW_FIELDS.note]: input.note.trim() } : {}) });

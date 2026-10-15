@@ -41,6 +41,20 @@ export class PostgrestError extends Error {
   }
 }
 
+/**
+ * The database API could not be reached or did not answer (network error,
+ * timeout, gateway 5xx without a PostgREST error body). The request may or
+ * may not have committed; every Content OS operation is idempotent, so the
+ * caller retries the SAME request. Carries no URL, header or body.
+ */
+export class PersistenceTransportError extends Error {
+  readonly code = "PERSISTENCE_TRANSPORT_FAILURE";
+  constructor(readonly status: number | null, readonly cause_: string) {
+    super(`database API unavailable (${status ?? cause_})`);
+    this.name = "PersistenceTransportError";
+  }
+}
+
 export interface PostgrestConfig {
   /** e.g. https://<project>.supabase.co — the adapter appends /rest/v1. */
   readonly baseUrl: string;
@@ -69,8 +83,14 @@ export class PostgrestClient {
       "Content-Type": "application/json",
     };
     if (prefer) headers.Prefer = prefer;
-    const response = await this.config.fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    const text = await response.text();
+    let response: Awaited<ReturnType<FetchLike>>;
+    let text: string;
+    try {
+      response = await this.config.fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+      text = await response.text();
+    } catch (error) {
+      throw new PersistenceTransportError(null, error instanceof Error ? error.name : "fetch failed");
+    }
     if (!response.ok) {
       let pgCode: string | null = null;
       let message = text;
@@ -79,6 +99,7 @@ export class PostgrestClient {
         pgCode = parsed.code ?? null;
         message = parsed.message ?? text;
       } catch { /* non-JSON error body */ }
+      if (pgCode === null && response.status >= 500) throw new PersistenceTransportError(response.status, "gateway");
       throw new PostgrestError(response.status, pgCode, message);
     }
     return text ? JSON.parse(text) : null;

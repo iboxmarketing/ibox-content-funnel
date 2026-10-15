@@ -159,7 +159,7 @@ test("5-7. approved lifecycle: revision parks the SAME Head Review BLOCKED; resu
   assert.equal(revisionEvent.metadata.reviewTaskId, reviewTaskId, "the deciding review is recorded on the Blog event");
   assert.ok(w.tasks.events.some((e) => e.taskId === reviewTaskId && e.eventType === "TASK_BLOCKED" && e.metadata.sourceTaskId === blogTaskId && e.metadata.coupledContentOsTransition === true));
   assert.equal(w.tasks.revisions.filter((r) => r.taskId === blogTaskId).length, 1);
-  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /only while its source Blog is DONE/);
+  await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: REVIEWER }), /a BLOCKED Head Review cannot be approved/);
   await assert.rejects(() => w.tasks.transition(reviewTaskId, REVIEWER, "DONE"), /changed concurrently/, "a BLOCKED review cannot complete");
 
   const resubmitted = await w.flow.completeBlog({ blogTaskId, actorId: AUTHOR, reviewerId: OTHER, reviewDeadline: "2026-11-01T00:00:00.000Z" });
