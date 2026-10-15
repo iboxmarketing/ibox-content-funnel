@@ -30,9 +30,9 @@ const freePort = () => new Promise((resolve) => {
 export async function startWorker({ vars = {}, caFile = null }) {
   const port = await freePort();
   const state = mkdtempSync(join(tmpdir(), "ibox-e2e-wrangler-")); // isolated from .wrangler/state and other workers
-  const args = ["--import", "./scripts/sites-env.mjs", "./node_modules/wrangler/bin/wrangler.js", "dev", "--config", "dist/server/wrangler.json", "--local", "--persist-to", state, "--ip", "127.0.0.1", "--inspector-port", "0", "--port", String(port)];
+  const args = ["./node_modules/wrangler/bin/wrangler.js", "dev", "--config", "dist/server/wrangler.json", "--local", "--persist-to", state, "--ip", "127.0.0.1", "--inspector-port", "0", "--port", String(port)];
   for (const [name, value] of Object.entries(vars)) args.push("--var", `${name}:${value}`);
-  const child = spawn("node", args, { cwd: ROOT, env: { ...process.env, ...(caFile ? { NODE_EXTRA_CA_CERTS: caFile } : {}), FORCE_COLOR: "0" }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn("node", args, { cwd: ROOT, env: { ...process.env, ...(caFile ? { NODE_EXTRA_CA_CERTS: caFile } : {}), FORCE_COLOR: "0", WRANGLER_SEND_METRICS: "false", WRANGLER_WRITE_LOGS: "false" }, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   const output = [];
   child.stdout.on("data", (d) => output.push(d.toString()));
   child.stderr.on("data", (d) => output.push(d.toString()));

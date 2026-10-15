@@ -116,18 +116,13 @@ test("transition RPC: composite row result; 42501 / 22023 refusals come back wit
   assert.deepEqual(await tasks.getActor(ids.former), { id: ids.former, role: "SMM_MANAGER", isActive: false });
 });
 
-test("HAZARD (Task Bot owned): a 40001 refusal is retried by PostgREST without limit and never answers", async () => {
+test("a Task Bot 40001 refusal returns promptly and leaves no stuck transaction", async () => {
   const { taskId } = await create(`e2e:${randomUUID()}`);
   const timed = new PostgrestClient({ baseUrl: gw.url, serviceRoleKey: SERVICE, fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(3_000) }) });
-  const rollbacks = () => Number(sql("select xact_rollback from pg_stat_database where datname = current_database()"));
-  const before = rollbacks();
   // Legacy task IN_PROGRESS -> DONE: the Task Bot raises 40001 ('task status changed concurrently').
-  await assert.rejects(() => new SupabaseOperationalTaskGateway(timed).transition(taskId, ids.author, "DONE"), (e) => e.code === "PERSISTENCE_TRANSPORT_FAILURE");
-  const retried = rollbacks() - before;
-  assert.ok(retried > 100, `PostgREST re-ran the refused transaction ${retried} times in 3s`);
+  await assert.rejects(() => new SupabaseOperationalTaskGateway(timed).transition(taskId, ids.author, "DONE"), (e) => e?.name === "PostgrestError" && /task status changed concurrently/.test(e.message));
   const stuck = () => Number(sql("select count(*) from pg_stat_activity where usename = 'authenticator' and state <> 'idle' and query not like 'LISTEN%'"));
-  assert.ok(stuck() >= 1, "the loop outlives the client's disconnect");
-  sql("select pg_terminate_backend(pid) from pg_stat_activity where usename = 'authenticator' and state <> 'idle' and query not like 'LISTEN%'");
+  assert.equal(stuck(), 0);
   assert.equal(status(taskId), "IN_PROGRESS");
 });
 

@@ -28,7 +28,7 @@ export const CONTENT_OS_ID_NAMESPACE = "6f1c2c0e-4d6b-5a3e-9c1d-2b7e8a9f0c11";
 /** RFC 4122 version-5 (SHA-1, name-based) UUID. */
 export function deterministicUuid(name: string, namespace = CONTENT_OS_ID_NAMESPACE): string {
   const ns = Buffer.from(namespace.replace(/-/g, ""), "hex");
-  const bytes = createHash("sha1").update(Buffer.concat([ns, Buffer.from(name, "utf8")])).digest().subarray(0, 16);
+  const bytes = Buffer.from(createHash("sha1").update(Buffer.concat([ns, Buffer.from(name, "utf8")])).digest().subarray(0, 16));
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString("hex");

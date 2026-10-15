@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # LOCAL E2E ONLY. Builds a disposable database in the local Docker container
-# (default ibox-pg-dryrun, postgres:17) from the FINAL Task Bot migrations
-# (read-only worktree, default ../marketing-team-task-bot-sprint9b) plus the
-# Content OS drafts 00..06, then starts a real PostgREST (container
+# (default ibox-pg-dryrun, postgres:17) from the FINAL canonical Task Bot
+# migrations (read-only worktree, default ../marketing-team-task-bot-sprint9b),
+# then starts a real PostgREST (container
 # ibox-postgrest) in the database container's network namespace. Never point
 # this at Supabase. All credentials here are throwaway local values.
 set -euo pipefail
@@ -13,9 +13,6 @@ export BOT_MIGRATIONS="${BOT_MIGRATIONS:-$(cd "$ROOT/../marketing-team-task-bot-
 DB="${E2E_DB:-e2e}"
 echo "task bot migrations: $BOT_MIGRATIONS ($(git -C "$BOT_MIGRATIONS" rev-parse --short HEAD))"
 "$ROOT/supabase/content-os-drafts/dry-run/load-taskbot-baseline.sh" "$DB" > /dev/null
-for f in "$ROOT"/supabase/content-os-drafts/migrations/*.sql; do
-  docker exec -i "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -q -X -d "$DB" --single-transaction < "$f"
-done
 docker exec -i "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 -q -X -d "$DB" < "$HERE/seed.sql"
 docker rm -f ibox-postgrest > /dev/null 2>&1 || true
 docker run -d --name ibox-postgrest --network "container:$PG_CONTAINER" \
