@@ -1,5 +1,7 @@
 # Sprint 9 — Content OS transition contract (handoff to Task Bot A2/A3)
 
+> Historical persistence contract. Sprint 10A replaces the production Sites/SIWC identity sections with the Telegram-backed Worker session boundary in `docs/SPRINT_10A_CLOUDFLARE_AUTH.md`. Sites identity and `CONTENT_OS_IDENTITY_TRUST` are not used by any production runtime path.
+
 Status: **DESIGN + LOCAL DRY-RUN + IN-PROCESS TESTS ONLY.** Nothing applied
 to Supabase, nothing pushed or deployed, **no live integration has run**.
 Content OS branch `sprint-9b/persistence-bridge` (Sprint 9B from `ae4873d`,
