@@ -22,17 +22,21 @@ import { makeLocalTls, startWorker } from "./lib/worker.mjs";
 const UPSTREAM = process.env.PGRST_UPSTREAM ?? "http://172.17.0.2:3000";
 const SERVICE = mintKey("service_role");
 const DEADLINE = "2026-10-20T13:00:00.000Z";
-let tls, gw, worker, bare;
+let tls, gw, worker, bare, unconfirmed;
 
 before(async () => {
   tls = makeLocalTls();
   gw = await startGateway({ upstream: UPSTREAM, apiKeys: [SERVICE], tls: { key: readFileSync(tls.key), cert: readFileSync(tls.cert) } });
-  worker = await startWorker({ caFile: tls.ca, vars: { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_URL: gw.url, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: SERVICE, CONTENT_OS_IDENTITY_TENANT_KEY: "site-e2e" } });
+  const db = { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_URL: gw.url, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: SERVICE, CONTENT_OS_IDENTITY_TENANT_KEY: "site-e2e" };
+  // `worker` simulates a deployment whose trusted ingress the platform owner has confirmed.
+  worker = await startWorker({ caFile: tls.ca, vars: { ...db, CONTENT_OS_IDENTITY_TRUST: "OPENAI_SITES_DISPATCH" } });
   bare = await startWorker({});
+  unconfirmed = await startWorker({ caFile: tls.ca, vars: db });
 });
 after(async () => {
   worker?.stop();
   bare?.stop();
+  unconfirmed?.stop();
   await gw?.close();
   tls?.cleanup();
 });
@@ -264,7 +268,20 @@ test("states the Task Bot would refuse with 40001 are refused by Content OS firs
   assert.equal(Number(sql("select count(*) from pg_stat_activity where usename = 'authenticator' and state <> 'idle' and query not like 'LISTEN%'")), 0, "no request is stuck in the database");
 });
 
-test("identity header is not verified by the app: a direct request naming another subject acts as that user", async () => {
+test("direct spoof without a confirmed trust boundary fails closed: Head / reviewer / author / arbitrary / wrong tenant -> 503, nothing read or written", async () => {
+  const before = gw.log.length;
+  const tasks = Number(sql("select count(*) from public.tasks"));
+  for (const subject of ["siwc-head", "siwc-reviewer", "siwc-author", "anything-at-all", "siwc-other-tenant"]) {
+    for (const body of [{ action: "start", requestKey: `spoof-${randomUUID()}`, knowledgeNodeId: ids.node, blogTitle: "x", assigneeId: ids.author, deadline: DEADLINE }, { action: "reconcile", blogTaskId: randomUUID() }]) {
+      const res = await call(body, subject, { base: unconfirmed.url });
+      assert.deepEqual([res.status, res.body.code], [503, "CONTENT_OS_PERSISTENCE_CONFIG_ERROR"], subject);
+    }
+  }
+  assert.equal(gw.log.length, before, "no database API call was made");
+  assert.equal(Number(sql("select count(*) from public.tasks")), tasks);
+});
+
+test("DELEGATED TRUST (documents the residual risk): with the acknowledgement set, the app acts on whatever identity header reaches it", async () => {
   // Same request a browser would get injected by the dispatcher — sent straight to the Worker.
   const res = await start(`spoof-${randomUUID()}`, "siwc-head");
   assert.equal(res.status, 200);

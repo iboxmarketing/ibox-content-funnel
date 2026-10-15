@@ -260,7 +260,11 @@ test("config: disabled by default; explicit and complete or it throws; https onl
   assert.throws(() => resolveContentOsPersistenceConfig({ CONTENT_OS_PERSISTENCE_ENABLED: "true" }), /CONTENT_OS_SUPABASE_URL, CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY, CONTENT_OS_IDENTITY_TENANT_KEY are missing/);
   const base = { CONTENT_OS_PERSISTENCE_ENABLED: "true", CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: "k", CONTENT_OS_IDENTITY_TENANT_KEY: "t" };
   assert.throws(() => resolveContentOsPersistenceConfig({ ...base, CONTENT_OS_SUPABASE_URL: "http://x" }), /https/);
-  assert.deepEqual(resolveContentOsPersistenceConfig({ ...base, CONTENT_OS_SUPABASE_URL: "https://x.supabase.co" }), { supabaseUrl: "https://x.supabase.co", serviceRoleKey: "k", identityTenantKey: "t" });
+  const full = { ...base, CONTENT_OS_SUPABASE_URL: "https://x.supabase.co" };
+  for (const trust of [undefined, "", "true", "openai_sites_dispatch", "OPENAI_SIWC"]) {
+    assert.throws(() => resolveContentOsPersistenceConfig({ ...full, CONTENT_OS_IDENTITY_TRUST: trust }), /CONTENT_OS_IDENTITY_TRUST must be "OPENAI_SITES_DISPATCH"/, String(trust));
+  }
+  assert.deepEqual(resolveContentOsPersistenceConfig({ ...full, CONTENT_OS_IDENTITY_TRUST: "OPENAI_SITES_DISPATCH" }), { supabaseUrl: "https://x.supabase.co", serviceRoleKey: "k", identityTenantKey: "t", identityTrust: "OPENAI_SITES_DISPATCH" });
 });
 
 test("actor resolution: exactly one ACTIVE link to an ACTIVE user, or fail closed", async () => {
