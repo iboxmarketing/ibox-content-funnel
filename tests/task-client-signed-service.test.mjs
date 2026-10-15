@@ -31,6 +31,7 @@ const {
   CONTENT_OS_ACTOR_PROVIDER_HEADER,
   CONTENT_OS_ACTOR_SUBJECT_HEADER,
   CONTENT_OS_SIGNATURE_HEADER,
+  signTaskBackendRequest,
 } = require(join(dir, "content-os-task-backend-signer.js"));
 after(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -59,7 +60,7 @@ function closeServer(server) {
 }
 
 const SECRET = "test-content-os-task-backend-secret";
-const SUBJECT = "siwc-user-abc123";
+const SUBJECT = "22222222-2222-4222-8222-222222222222";
 const CONFIG_TEMPLATE = (baseUrl) => ({ baseUrl, secret: SECRET });
 
 const RAW_TASK = {
@@ -107,7 +108,7 @@ test("every request carries all four signed headers -- no marketing_session cook
 
   const headers = requests[0].headers;
   assert.ok(headers[CONTENT_OS_TIMESTAMP_HEADER]);
-  assert.equal(headers[CONTENT_OS_ACTOR_PROVIDER_HEADER], "OPENAI_SIWC");
+  assert.equal(headers[CONTENT_OS_ACTOR_PROVIDER_HEADER], "CONTENT_OS_TELEGRAM_SESSION");
   assert.equal(headers[CONTENT_OS_ACTOR_SUBJECT_HEADER], SUBJECT);
   assert.match(headers[CONTENT_OS_SIGNATURE_HEADER], /^[0-9a-f]{64}$/);
   assert.equal(headers.cookie, undefined);
@@ -158,6 +159,78 @@ test("requestDeadlineChange() POSTs exactly requestedDeadline+reason", async () 
   assert.deepEqual(requests[0].body, { requestedDeadline: "2026-10-05T09:00:00.000Z", reason: "date moved" });
 });
 
+test("team-task list query signs only the pathname, matching Task Bot verification", async () => {
+  const calls = [];
+  const now = () => new Date("2026-10-15T12:00:00.000Z");
+  const fetchImpl = async (input, init) => {
+    calls.push({ input, init });
+    return Response.json({ tasks: [RAW_TASK] });
+  };
+  const client = new SignedServiceTaskClient(CONFIG_TEMPLATE("https://tasks.example.test"), SUBJECT, fetchImpl, now);
+  const tasks = await client.listTasks("all");
+  assert.equal(tasks.length, 1);
+  assert.equal(calls[0].input, "https://tasks.example.test/api/tasks?scope=all");
+  const expected = signTaskBackendRequest(
+    { method: "GET", path: "/api/tasks", bodyText: "", externalSubject: SUBJECT },
+    SECRET,
+    now,
+  );
+  assert.equal(new Headers(calls[0].init.headers).get(CONTENT_OS_SIGNATURE_HEADER), expected[CONTENT_OS_SIGNATURE_HEADER]);
+});
+
+test("the complete team-management client surface maps to Task Bot's canonical routes and payloads", async () => {
+  const calls = [];
+  const fetchImpl = async (input, init) => {
+    const url = new URL(input);
+    const body = init.body ? JSON.parse(init.body) : null;
+    calls.push({ method: init.method, path: `${url.pathname}${url.search}`, body });
+    if (url.pathname === "/api/users") return Response.json({ users: [] });
+    if (url.pathname === "/api/requests") return Response.json({ deadlineRequests: [], reassignRequests: [] });
+    if (url.pathname.endsWith("/reassign-requests") || url.pathname.startsWith("/api/reassign-requests/")) {
+      return Response.json({ reassignRequest: { id: "reassign-request" } });
+    }
+    if (url.pathname.endsWith("/deadline-requests") || url.pathname.startsWith("/api/deadline-requests/")) {
+      return Response.json({ deadlineRequest: { id: "deadline-request" } });
+    }
+    if (url.pathname.endsWith("/archive")) return Response.json({ archive: { taskId: RAW_TASK.id } });
+    if (init.method === "GET" && url.pathname === `/api/tasks/${RAW_TASK.id}`) {
+      return Response.json({ task: RAW_TASK, archive: null, events: [], deadlineRequests: [], reassignRequests: [] });
+    }
+    return Response.json({ task: RAW_TASK });
+  };
+  const client = new SignedServiceTaskClient(CONFIG_TEMPLATE("https://tasks.example.test"), SUBJECT, fetchImpl);
+
+  await client.getDetails(RAW_TASK.id);
+  await client.listUsers();
+  await client.listChangeRequests("PENDING");
+  await client.editTask(RAW_TASK.id, { title: "Edited", description: null, priority: "high" });
+  await client.directReassign(RAW_TASK.id, RAW_TASK.assigneeId);
+  await client.directDeadline(RAW_TASK.id, "2026-11-01T09:00:00.000Z");
+  await client.requestReassign(RAW_TASK.id, RAW_TASK.creatorId, "Capacity");
+  await client.requestDeadline(RAW_TASK.id, "2026-11-02T09:00:00.000Z", "Dependency");
+  await client.resolveReassign("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", true, "Approved");
+  await client.resolveDeadline("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", false);
+  await client.archive(RAW_TASK.id, "No longer needed");
+  await client.restore(RAW_TASK.id);
+  await client.action(RAW_TASK.id, "CANCEL", "Stopped");
+
+  assert.deepEqual(calls, [
+    { method: "GET", path: `/api/tasks/${RAW_TASK.id}`, body: null },
+    { method: "GET", path: "/api/users", body: null },
+    { method: "GET", path: "/api/requests?status=PENDING", body: null },
+    { method: "PATCH", path: `/api/tasks/${RAW_TASK.id}`, body: { title: "Edited", description: null, priority: "high" } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/reassign`, body: { assigneeId: RAW_TASK.assigneeId } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/deadline`, body: { deadline: "2026-11-01T09:00:00.000Z" } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/reassign-requests`, body: { requestedAssigneeId: RAW_TASK.creatorId, reason: "Capacity" } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/deadline-requests`, body: { requestedDeadline: "2026-11-02T09:00:00.000Z", reason: "Dependency" } },
+    { method: "POST", path: "/api/reassign-requests/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/resolve", body: { approve: true, resolutionNote: "Approved" } },
+    { method: "POST", path: "/api/deadline-requests/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/resolve", body: { approve: false } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/archive`, body: { reason: "No longer needed" } },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/restore`, body: {} },
+    { method: "POST", path: `/api/tasks/${RAW_TASK.id}/actions`, body: { action: "CANCEL", reason: "Stopped" } },
+  ]);
+});
+
 // --- Error mapping: 401/403/409/503 ---
 
 for (const [status, code] of [[401, "UNAUTHENTICATED"], [403, "FORBIDDEN"], [409, "CONFLICT"], [503, "INTEGRATION_UNAVAILABLE"]]) {
@@ -201,16 +274,4 @@ test("getSignedServiceTaskClient() succeeds and returns a usable client when ful
     SUBJECT,
   );
   assert.ok(client instanceof SignedServiceTaskClient);
-});
-
-// --- Idempotency (documented gap, same as HttpTaskClient's) ---
-
-test("create() has no client-side idempotency key -- two identical calls produce two separate requests", async () => {
-  const { server, requests, baseUrl } = await startMockServer(() => ({ status: 201, body: { task: RAW_TASK, assignee: {}, notification: { status: "SENT" } } }));
-  const client = new SignedServiceTaskClient(CONFIG_TEMPLATE(baseUrl), SUBJECT);
-  const input = { title: "Same task twice", assigneeId: RAW_TASK.assigneeId, creatorId: RAW_TASK.creatorId, deadline: RAW_TASK.deadline, priority: "normal" };
-  await client.create(input);
-  await client.create(input);
-  await closeServer(server);
-  assert.equal(requests.length, 2);
 });

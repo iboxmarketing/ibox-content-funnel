@@ -12,14 +12,19 @@ import type { EnvLike, TaskBackendServiceAuthConfig } from "./task-backend-servi
 import type {
   CreateTaskBackendTaskInput,
   DeadlineChangeRequestInput,
+  TaskBackendChangeRequests,
+  TaskBackendDeadlineRequest,
+  TaskBackendDetails,
+  TaskBackendReassignRequest,
   TaskBackendStatus,
   TaskBackendTask,
+  TaskBackendUser,
   TaskClient,
 } from "./task-client-types";
 
 export { AmbiguousTransitionError, TaskBackendHttpError, TaskBackendServiceAuthConfigError, TaskBackendSignerInputError };
 
-type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 /**
  * TaskClient wired to marketing-team-task-bot's real, sanctioned server-to-
@@ -29,11 +34,8 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
  * route/payload/response mapping (task-backend-wire-mapping.ts) as
  * HttpTaskClient; only the auth headers differ.
  *
- * Not the default TaskClient anywhere in this codebase -- task-client.ts's
- * getTaskClient() still always returns BlockedTaskClient, and nothing in
- * app/ constructs this class. See getSignedServiceTaskClient() below for
- * the fail-closed factory that is the only sanctioned way to obtain one,
- * and note it still has no production call site.
+ * The team-task server route constructs this through the fail-closed factory
+ * below only after validating the Content OS Telegram session.
  *
  * Every request is signed fresh (signTaskBackendRequest), so the secret
  * itself never leaves this process -- only the resulting headers are sent.
@@ -41,17 +43,16 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 export class SignedServiceTaskClient implements TaskClient {
   constructor(
     private readonly config: TaskBackendServiceAuthConfig,
-    /** The current SIWC external subject -- caller-supplied, never invented
-     * or derived here. See docs/CONTENT_OS_SERVICE_AUTH.md's actor
-     * resolution section on the bot side: this is not a public.users.id. */
+    /** Current public.users.id from the validated Content OS session. */
     private readonly externalSubject: string,
     private readonly fetchImpl: FetchLike = (...args) => fetch(...args),
     private readonly now: () => Date = () => new Date(),
   ) {}
 
   private async request(method: string, path: string, bodyText = ""): Promise<unknown> {
+    const signingPath = new URL(path, "https://task-backend.internal").pathname;
     const signedHeaders = signTaskBackendRequest(
-      { method, path, bodyText, externalSubject: this.externalSubject },
+      { method, path: signingPath, bodyText, externalSubject: this.externalSubject },
       this.config.secret,
       this.now,
     );
@@ -119,6 +120,78 @@ export class SignedServiceTaskClient implements TaskClient {
     return this.performAction(taskId, "REQUEST_REVISION", reason);
   }
 
+  async listTasks(scope: "my" | "all" | "archived" = "all"): Promise<readonly TaskBackendTask[]> {
+    const body = await this.request("GET", `/api/tasks?scope=${encodeURIComponent(scope)}`);
+    return ((body as { tasks: Record<string, unknown>[] }).tasks ?? []).map(mapBotTask);
+  }
+
+  async getDetails(taskId: string): Promise<TaskBackendDetails> {
+    const body = await this.request("GET", `/api/tasks/${encodeURIComponent(taskId)}`) as Record<string, unknown>;
+    return { ...body, task: mapBotTask(body.task as Record<string, unknown>) } as TaskBackendDetails;
+  }
+
+  async listUsers(): Promise<readonly TaskBackendUser[]> {
+    const body = await this.request("GET", "/api/users");
+    return (body as { users: TaskBackendUser[] }).users ?? [];
+  }
+
+  async listChangeRequests(status?: "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED"): Promise<TaskBackendChangeRequests> {
+    const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
+    return await this.request("GET", `/api/requests${suffix}`) as TaskBackendChangeRequests;
+  }
+
+  async editTask(taskId: string, input: { title: string; description: string | null; priority: "high" | "normal" | "low" }): Promise<TaskBackendTask> {
+    const body = await this.request("PATCH", `/api/tasks/${encodeURIComponent(taskId)}`, JSON.stringify(input));
+    return mapBotTask((body as { task: Record<string, unknown> }).task);
+  }
+
+  async directReassign(taskId: string, assigneeId: string): Promise<TaskBackendTask> {
+    const body = await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/reassign`, JSON.stringify({ assigneeId }));
+    return mapBotTask((body as { task: Record<string, unknown> }).task);
+  }
+
+  async directDeadline(taskId: string, deadline: string): Promise<TaskBackendTask> {
+    const body = await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/deadline`, JSON.stringify({ deadline }));
+    return mapBotTask((body as { task: Record<string, unknown> }).task);
+  }
+
+  async requestReassign(taskId: string, requestedAssigneeId: string, reason: string): Promise<TaskBackendReassignRequest> {
+    const body = await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/reassign-requests`, JSON.stringify({ requestedAssigneeId, reason }));
+    return (body as { reassignRequest: TaskBackendReassignRequest }).reassignRequest;
+  }
+
+  async requestDeadline(taskId: string, requestedDeadline: string, reason: string): Promise<TaskBackendDeadlineRequest> {
+    const body = await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/deadline-requests`, JSON.stringify({ requestedDeadline, reason }));
+    return (body as { deadlineRequest: TaskBackendDeadlineRequest }).deadlineRequest;
+  }
+
+  async resolveReassign(requestId: string, approve: boolean, resolutionNote?: string): Promise<TaskBackendReassignRequest> {
+    const body = await this.request("POST", `/api/reassign-requests/${encodeURIComponent(requestId)}/resolve`, JSON.stringify({ approve, ...(resolutionNote ? { resolutionNote } : {}) }));
+    return (body as { reassignRequest: TaskBackendReassignRequest }).reassignRequest;
+  }
+
+  async resolveDeadline(requestId: string, approve: boolean, resolutionNote?: string): Promise<TaskBackendDeadlineRequest> {
+    const body = await this.request("POST", `/api/deadline-requests/${encodeURIComponent(requestId)}/resolve`, JSON.stringify({ approve, ...(resolutionNote ? { resolutionNote } : {}) }));
+    return (body as { deadlineRequest: TaskBackendDeadlineRequest }).deadlineRequest;
+  }
+
+  async archive(taskId: string, reason?: string): Promise<void> {
+    await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/archive`, JSON.stringify(reason ? { reason } : {}));
+  }
+
+  async restore(taskId: string): Promise<TaskBackendTask> {
+    const body = await this.request("POST", `/api/tasks/${encodeURIComponent(taskId)}/restore`, "{}");
+    return mapBotTask((body as { task: Record<string, unknown> }).task);
+  }
+
+  async action(
+    taskId: string,
+    action: "ACCEPT" | "BLOCK" | "RESUME" | "SUBMIT_REVIEW" | "APPROVE" | "REQUEST_REVISION" | "CANCEL" | "REOPEN",
+    reason?: string,
+  ): Promise<TaskBackendTask> {
+    return this.performAction(taskId, action, reason);
+  }
+
   private async performAction(taskId: string, action: string, reason?: string): Promise<TaskBackendTask> {
     const body = await this.request(
       "POST",
@@ -133,18 +206,19 @@ export class SignedServiceTaskClient implements TaskClient {
  * The only sanctioned way to obtain a SignedServiceTaskClient. Fails closed
  * BEFORE any network attempt: no config (disabled/unset -- the default) or
  * no externalSubject both throw immediately, synchronously, with no fetch
- * ever scheduled. There is no production call site for this today.
+ * ever scheduled.
  */
 export function getSignedServiceTaskClient(
   env: EnvLike,
   externalSubject: string | null | undefined,
+  fetchImpl?: FetchLike,
 ): SignedServiceTaskClient {
   const config = resolveTaskBackendServiceAuthConfig(env);
   if (!config) {
     throw new TaskBackendServiceAuthConfigError("Task backend service auth is disabled or not configured.");
   }
   if (!externalSubject) {
-    throw new TaskBackendSignerInputError("A current SIWC external subject is required to use the task-backend service client.");
+    throw new TaskBackendSignerInputError("A current Telegram-session actor id is required to use the task-backend service client.");
   }
-  return new SignedServiceTaskClient(config, externalSubject);
+  return new SignedServiceTaskClient(config, externalSubject, fetchImpl);
 }

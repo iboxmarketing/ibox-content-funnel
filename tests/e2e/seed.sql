@@ -11,7 +11,9 @@ insert into public.users (id, telegram_user_id, display_name, role, is_active) v
   ('00000000-0000-4000-8000-00000000e002', 9002, 'Author', 'CONTENT_MARKETER', true),
   ('00000000-0000-4000-8000-00000000e003', 9003, 'Reviewer', 'DIGITAL_MARKETER', true),
   ('00000000-0000-4000-8000-00000000e004', 9004, 'Other', 'SMM_MANAGER', true),
-  ('00000000-0000-4000-8000-00000000e005', 9005, 'Former', 'SMM_MANAGER', false);
+  ('00000000-0000-4000-8000-00000000e005', 9005, 'Former', 'SMM_MANAGER', false),
+  ('00000000-0000-4000-8000-00000000e006', 9006, 'Operator', 'OPERATOR_VIDEO_EDITOR', true),
+  ('00000000-0000-4000-8000-00000000e007', 9007, 'SEO', 'SEO_SPECIALIST', true);
 
 -- Tenant "site-e2e". One link per scenario; revoked / wrong-tenant / inactive-user rows exist on purpose.
 insert into public.external_identity_links (provider, tenant_key, external_subject, user_id, linked_by) values

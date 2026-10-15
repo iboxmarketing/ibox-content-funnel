@@ -62,6 +62,11 @@ export function mapBotTask(raw: Record<string, unknown>): TaskBackendTask {
     assigneeId: String(raw.assigneeId),
     creatorId: String(raw.creatorId),
     deadline: String(raw.deadline),
+    blockedReason: typeof raw.blockedReason === "string" ? raw.blockedReason : null,
+    completedAt: typeof raw.completedAt === "string" ? raw.completedAt : null,
+    cancelledAt: typeof raw.cancelledAt === "string" ? raw.cancelledAt : null,
+    createdAt: typeof raw.createdAt === "string" ? raw.createdAt : "",
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
     // Not part of marketing-team-task-bot's TaskSchema today -- no bridge
     // column exists yet, so this is always null, never guessed from raw data.
     contentRef: null,

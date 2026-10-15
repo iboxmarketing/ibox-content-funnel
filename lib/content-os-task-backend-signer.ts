@@ -4,15 +4,15 @@ import { createHash, createHmac } from "node:crypto";
  * Outbound signer for marketing-team-task-bot's server-to-server auth
  * protocol (see that repo's docs/CONTENT_OS_SERVICE_AUTH.md). Produces
  * exactly the four headers that side verifies -- never the secret itself,
- * and never anything the bot did not ask for (no public.users.id, no
- * invented identity: only the caller-supplied SIWC external subject).
+ * and never anything the bot did not ask for. The subject is the current
+ * public.users.id returned by Telegram web-session validation.
  *
  * This module must only ever run server-side. It is not itself wrapped in
  * `import "server-only"` because that package is unresolvable under this
  * repo's plain-Node test harness (the same reason lib/google-sheets.ts's
  * "server-only" import is never exercised by `node --test`); the guarantee
- * instead comes from this module never being imported by any client
- * component or API route today -- see task-client-signed-service-security.test.mjs.
+ * instead comes from this module being imported only by server API code --
+ * see task-client-signed-service-security.test.mjs.
  *
  * Canonical signing input, byte-for-byte matching the bot side:
  *   signingKey = HMAC-SHA256("content-os-service-auth-v1", secret)
@@ -27,7 +27,7 @@ export const CONTENT_OS_ACTOR_SUBJECT_HEADER = "x-content-os-actor-subject";
 export const CONTENT_OS_SIGNATURE_HEADER = "x-content-os-signature";
 
 /** Fixed for this integration -- not configurable, per the agreed protocol. */
-export const CONTENT_OS_TASK_BACKEND_PROVIDER = "OPENAI_SIWC";
+export const CONTENT_OS_TASK_BACKEND_PROVIDER = "CONTENT_OS_TELEGRAM_SESSION";
 
 export type SignedTaskBackendHeaders = Readonly<
   Record<
@@ -43,8 +43,7 @@ export interface SignTaskBackendRequestInput {
   readonly method: string;
   readonly path: string;
   readonly bodyText: string;
-  /** The current SIWC external subject -- never a public.users.id. The bot's
-   * ExternalActorResolver owns mapping this to a real actor. */
+  /** Current public.users.id from the validated Content OS Telegram session. */
   readonly externalSubject: string;
 }
 
@@ -72,7 +71,7 @@ export function signTaskBackendRequest(
   now: () => Date = () => new Date(),
 ): SignedTaskBackendHeaders {
   if (!input.externalSubject) {
-    throw new TaskBackendSignerInputError("A current SIWC external subject is required to sign a task-backend request.");
+    throw new TaskBackendSignerInputError("A current Telegram-session actor id is required to sign a task-backend request.");
   }
   if (!secret) {
     throw new TaskBackendSignerInputError("A task-backend service secret is required to sign a request.");

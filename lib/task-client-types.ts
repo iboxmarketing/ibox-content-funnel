@@ -26,6 +26,11 @@ export interface TaskBackendTask {
   readonly assigneeId: string;
   readonly creatorId: string;
   readonly deadline: string;
+  readonly blockedReason: string | null;
+  readonly completedAt: string | null;
+  readonly cancelledAt: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
   /**
    * Optional stable ref back into Content OS (e.g. a TPI-* package item).
    * Only meaningful once a bridge column exists on the task-backend side --
@@ -33,6 +38,78 @@ export interface TaskBackendTask {
    * `null` for every task until it does.
    */
   readonly contentRef: string | null;
+}
+
+export interface TaskBackendUser {
+  readonly id: string;
+  readonly telegramUsername: string | null;
+  readonly displayName: string;
+  readonly role: "HEAD_OF_MARKETING" | "CONTENT_MARKETER" | "DIGITAL_MARKETER" | "SMM_MANAGER" | "SEO_SPECIALIST" | "OPERATOR_VIDEO_EDITOR";
+  readonly isActive: boolean;
+  readonly deactivatedAt: string | null;
+}
+
+export interface TaskBackendEvent {
+  readonly id: string;
+  readonly taskId: string;
+  readonly actorId: string | null;
+  readonly eventType: string;
+  readonly oldValue: unknown;
+  readonly newValue: unknown;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly createdAt: string;
+}
+
+export type TaskBackendRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+
+export interface TaskBackendDeadlineRequest {
+  readonly id: string;
+  readonly taskId: string;
+  readonly requestedBy: string;
+  readonly currentDeadline: string;
+  readonly requestedDeadline: string;
+  readonly reason: string;
+  readonly status: TaskBackendRequestStatus;
+  readonly resolvedBy: string | null;
+  readonly resolvedAt: string | null;
+  readonly resolutionNote: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface TaskBackendReassignRequest {
+  readonly id: string;
+  readonly taskId: string;
+  readonly requestedBy: string;
+  readonly currentAssigneeId: string;
+  readonly requestedAssigneeId: string;
+  readonly reason: string;
+  readonly status: TaskBackendRequestStatus;
+  readonly resolvedBy: string | null;
+  readonly resolvedAt: string | null;
+  readonly resolutionNote: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface TaskBackendArchive {
+  readonly taskId: string;
+  readonly archivedAt: string;
+  readonly archivedBy: string;
+  readonly reason: string | null;
+}
+
+export interface TaskBackendDetails {
+  readonly task: TaskBackendTask;
+  readonly archive: TaskBackendArchive | null;
+  readonly events: readonly TaskBackendEvent[];
+  readonly deadlineRequests: readonly TaskBackendDeadlineRequest[];
+  readonly reassignRequests: readonly TaskBackendReassignRequest[];
+}
+
+export interface TaskBackendChangeRequests {
+  readonly deadlineRequests: readonly TaskBackendDeadlineRequest[];
+  readonly reassignRequests: readonly TaskBackendReassignRequest[];
 }
 
 export interface CreateTaskBackendTaskInput {

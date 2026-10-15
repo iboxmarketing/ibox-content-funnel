@@ -31,15 +31,15 @@ function baseInput(overrides = {}) {
     method: "POST",
     path: "/api/tasks",
     bodyText: JSON.stringify({ title: "Draft a carousel" }),
-    externalSubject: "siwc-user-abc123",
+    externalSubject: "22222222-2222-4222-8222-222222222222",
     ...overrides,
   };
 }
 
-test("the provider is fixed to OPENAI_SIWC, not configurable", () => {
-  assert.equal(CONTENT_OS_TASK_BACKEND_PROVIDER, "OPENAI_SIWC");
+test("the provider is fixed to CONTENT_OS_TELEGRAM_SESSION, not configurable", () => {
+  assert.equal(CONTENT_OS_TASK_BACKEND_PROVIDER, "CONTENT_OS_TELEGRAM_SESSION");
   const headers = signTaskBackendRequest(baseInput(), SECRET, FIXED_NOW);
-  assert.equal(headers[CONTENT_OS_ACTOR_PROVIDER_HEADER], "OPENAI_SIWC");
+  assert.equal(headers[CONTENT_OS_ACTOR_PROVIDER_HEADER], "CONTENT_OS_TELEGRAM_SESSION");
 });
 
 test("signing is deterministic: identical input and secret produce the identical signature every time", () => {
@@ -54,9 +54,10 @@ test("the timestamp header is unix seconds matching the injected clock", () => {
   assert.equal(headers[CONTENT_OS_TIMESTAMP_HEADER], String(Math.floor(FIXED_NOW().getTime() / 1000)));
 });
 
-test("the current SIWC external subject is included verbatim in the emitted headers", () => {
-  const headers = signTaskBackendRequest(baseInput({ externalSubject: "siwc-user-xyz789" }), SECRET, FIXED_NOW);
-  assert.equal(headers[CONTENT_OS_ACTOR_SUBJECT_HEADER], "siwc-user-xyz789");
+test("the current Telegram-session public.users id is included verbatim in the emitted headers", () => {
+  const externalSubject = "33333333-3333-4333-8333-333333333333";
+  const headers = signTaskBackendRequest(baseInput({ externalSubject }), SECRET, FIXED_NOW);
+  assert.equal(headers[CONTENT_OS_ACTOR_SUBJECT_HEADER], externalSubject);
 });
 
 test("changing the body changes the signature", () => {
@@ -78,8 +79,8 @@ test("changing the path changes the signature", () => {
 });
 
 test("changing the external subject changes the signature -- one identity cannot reuse another's signed request", () => {
-  const a = signTaskBackendRequest(baseInput({ externalSubject: "siwc-user-abc123" }), SECRET, FIXED_NOW);
-  const b = signTaskBackendRequest(baseInput({ externalSubject: "siwc-user-someone-else" }), SECRET, FIXED_NOW);
+  const a = signTaskBackendRequest(baseInput({ externalSubject: "22222222-2222-4222-8222-222222222222" }), SECRET, FIXED_NOW);
+  const b = signTaskBackendRequest(baseInput({ externalSubject: "33333333-3333-4333-8333-333333333333" }), SECRET, FIXED_NOW);
   assert.notEqual(a[CONTENT_OS_SIGNATURE_HEADER], b[CONTENT_OS_SIGNATURE_HEADER]);
 });
 

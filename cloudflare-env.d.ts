@@ -11,5 +11,8 @@ declare namespace Cloudflare {
     CONTENT_OS_SUPABASE_URL: string;
     CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY: string;
     CONTENT_OS_TELEGRAM_BOT_USERNAME: string;
+    TASK_BACKEND_SERVICE_AUTH_ENABLED: string;
+    TASK_BACKEND_BASE_URL: string;
+    CONTENT_OS_TASK_BACKEND_SECRET: string;
   }
 }

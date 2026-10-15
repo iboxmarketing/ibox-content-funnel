@@ -28,9 +28,12 @@ Required server-only bindings:
 - `CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY`
 - `CONTENT_OS_TELEGRAM_BOT_USERNAME`
 - `CONTENT_OS_PERSISTENCE_ENABLED=true` for the persisted Blog review slice
+- `TASK_BACKEND_SERVICE_AUTH_ENABLED=true` to enable the Team Tasks server route
+- `TASK_BACKEND_BASE_URL` set to the approved Task Bot server origin
+- `CONTENT_OS_TASK_BACKEND_SECRET` matching Task Bot's server-only `CONTENT_OS_SERVICE_SECRET`
 - Google Sheets variables listed in `.env.example` when those views are enabled
 
-The service-role key and database URL must be configured as Worker secrets. No secret or session token is included in browser code. See [the Sprint 10A production-auth contract](docs/SPRINT_10A_CLOUDFLARE_AUTH.md) for the login sequence, trust boundaries, local PostgreSQL 17 rehearsal, and deployment preconditions.
+The service-role key and shared Task Bot secret must be configured as Worker secrets. No secret or session token is included in browser code. See [the Sprint 10A production-auth contract](docs/SPRINT_10A_CLOUDFLARE_AUTH.md) for the login sequence and [the Sprint 10B Team Tasks contract](docs/SPRINT_10B_TEAM_TASKS.md) for permissions, signed service calls, and archive/request behavior.
 
 Task Bot is the canonical migration owner. Do not apply the historical Content OS draft migrations independently; migrations `00`–`06` are already present in the Task Bot canonical sequence.
 

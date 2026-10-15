@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
@@ -46,12 +46,34 @@ test("getTaskClient() still only ever returns BlockedTaskClient -- SignedService
   assert.match(text, /export function getTaskClient\(\): TaskClient \{\s*return new BlockedTaskClient\(\);\s*\}/);
 });
 
-test("nothing outside the tests directory calls getSignedServiceTaskClient, constructs SignedServiceTaskClient, or signs a request", () => {
+test("legacy production-task surfaces cannot reach the signed team-task client", () => {
   const productionFiles = ["lib/data-source.ts", "lib/task-client.ts", "app/api/production/tasks/route.ts"];
   for (const file of productionFiles) {
     const text = readFileSync(join(REPO_ROOT, file), "utf8");
     assert.doesNotMatch(text, /SignedServiceTaskClient|getSignedServiceTaskClient|signTaskBackendRequest/, file);
   }
+});
+
+test("only the authenticated server route constructs the signed client; browser components never import signer modules", () => {
+  const route = readFileSync(join(REPO_ROOT, "app/api/team/tasks/route.ts"), "utf8");
+  assert.match(route, /requireAuthenticatedUser/);
+  assert.match(route, /readSameOriginJson/);
+  assert.match(route, /getSignedServiceTaskClient\(process\.env, actorId, backendFetch\)/);
+
+  const componentFiles = readdirSync(join(REPO_ROOT, "components"), { recursive: true })
+    .filter((name) => /\.(ts|tsx)$/.test(String(name)));
+  for (const name of componentFiles) {
+    const file = join(REPO_ROOT, "components", String(name));
+    const text = readFileSync(file, "utf8");
+    assert.doesNotMatch(text, /content-os-task-backend-signer|task-client-signed-service|CONTENT_OS_TASK_BACKEND_SECRET/, file);
+  }
+});
+
+test("team-task route never returns or logs the shared secret", () => {
+  const text = readFileSync(join(REPO_ROOT, "app/api/team/tasks/route.ts"), "utf8");
+  assert.doesNotMatch(text, /CONTENT_OS_TASK_BACKEND_SECRET/);
+  assert.doesNotMatch(text, /console\.(log|error)\([^)]*process\.env/);
+  assert.match(text, /errorName:/);
 });
 
 test("app/api/production/tasks is still untouched by this change: PATCH stays 503 TASK_BACKEND_SETUP_REQUIRED", () => {

@@ -17,6 +17,7 @@ import {
   LayoutDashboard,
   Layers3,
   ListChecks,
+  ListTodo,
   Maximize2,
   Network,
   PlaySquare,
@@ -32,6 +33,7 @@ import { TaskRuntimeStoreProvider } from "@/components/task-runtime-store-provid
 import { ContentEntityStoreProvider } from "@/components/content-entity-store-provider";
 import { LocalPrototypeBanner } from "@/components/local-prototype-banner";
 import { SessionControl } from "@/components/session-control";
+import { TeamTaskManagement } from "@/components/team-task-management";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -68,6 +70,7 @@ import type { TrackingPreviewFixture } from "@/lib/tracking-preview-fixtures";
 import type { KnowledgeApiResponse, KnowledgeGraph } from "@/lib/knowledge-types";
 import { applyScheduleOverrides, recalculateSchedule, type ScheduleOverrides } from "@/lib/scheduling-engine";
 import type { ProductionApiResponse, ProductionDataset } from "@/lib/production-types";
+import type { ContentOsRole } from "@/lib/auth/repository";
 
 type Filters = {
   area: string;
@@ -88,7 +91,7 @@ type SearchResult = {
 
 const EMPTY_FILTERS: Filters = { area: "all", businessType: "all", segment: "all", priority: "all", responsible: "all" };
 
-type MainView = "mindmap" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun" | "contentTree" | "production";
+type MainView = "mindmap" | "teamTasks" | "packages" | "kanban" | "calendar" | "settings" | "taskTypes" | "workflows" | "workflowRun" | "contentTree" | "production";
 
 const ContentKanban = dynamic(() => import("@/components/content-kanban").then((module) => module.ContentKanban), { ssr: false });
 const ContentCalendar = dynamic(() => import("@/components/content-calendar").then((module) => module.ContentCalendar), { ssr: false });
@@ -108,6 +111,7 @@ const ContentTreeView = dynamic(() => import("@/components/content-tree-view").t
 
 const ACTIVE_VIEWS: Array<{ id: MainView; label: string; icon: typeof Network }> = [
   { id: "mindmap", label: "Mind Map", icon: Network },
+  { id: "teamTasks", label: "Team Tasks", icon: ListTodo },
   { id: "packages", label: "Mavzu paketlari", icon: Layers3 },
   { id: "kanban", label: "Content Kanban", icon: Columns3 },
   { id: "calendar", label: "Content Calendar", icon: CalendarDays },
@@ -222,7 +226,7 @@ function LoadingState() {
   );
 }
 
-export function KnowledgeOS({ currentUser }: { currentUser: { displayName: string; role: string } }) {
+export function KnowledgeOS({ currentUser }: { currentUser: { id: string; displayName: string; role: ContentOsRole } }) {
   const [scheduleOverrides, setScheduleOverrides] = useState<ScheduleOverrides>({});
   const simulation = Object.keys(scheduleOverrides).length > 0;
   const [activeView, setActiveView] = useState<MainView>("mindmap");
@@ -360,7 +364,7 @@ export function KnowledgeOS({ currentUser }: { currentUser: { displayName: strin
   }, [loadData]);
 
   useEffect(() => {
-    if (activeView === "mindmap" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun" || activeView === "contentTree" || activeView === "production") return;
+    if (activeView === "mindmap" || activeView === "teamTasks" || activeView === "packages" || activeView === "taskTypes" || activeView === "workflows" || activeView === "workflowRun" || activeView === "contentTree" || activeView === "production") return;
     // Load production data only when an operational view is opened. Task
     // Type Library / Workflow Builder / Workflow Run / Content Tree are
     // local/session-only config + runtime tools (V1 Sprint 1-3) and never
@@ -610,7 +614,12 @@ export function KnowledgeOS({ currentUser }: { currentUser: { displayName: strin
 
           {syncError && graph && <button type="button" onClick={() => void loadData(true)} className="absolute right-5 top-4 z-30 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-semibold text-amber-800 shadow-lg"><AlertTriangle className="size-4" /> Sync failed — retry</button>}
         </main>
-        </> : activeView === "packages" ? setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : catalogPreview && catalogDemo && ctaPreview && assistantPreview && materialWorkplanPreview && trackingPreview ? (
+        </> : activeView === "teamTasks" ? (
+          <div className="relative flex h-full min-h-0 flex-col">
+            <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
+            <div className="min-h-0 flex-1"><TeamTaskManagement currentUser={currentUser} /></div>
+          </div>
+        ) : activeView === "packages" ? setup ? <SetupState missing={setup.missing} spreadsheetIdConfigured={setup.spreadsheetIdConfigured} /> : catalogPreview && catalogDemo && ctaPreview && assistantPreview && materialWorkplanPreview && trackingPreview ? (
           <div className="relative h-full min-h-0">
             <SidebarTrigger className="absolute left-2 top-2 z-50 bg-white shadow-sm lg:hidden" />
             <TopicPackages preview={catalogPreview} demo={catalogDemo} ctaPreview={ctaPreview} assistantPreview={assistantPreview} materialWorkplanPreview={materialWorkplanPreview} trackingPreview={trackingPreview} snapshotOrigin={catalogOrigin} onRefresh={() => void loadCatalog(true)} refreshing={refreshing} lastSynced={catalogSynced ?? catalogPreview.sourceSnapshot.capturedAt} />

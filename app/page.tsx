@@ -7,5 +7,5 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const user = await getAuthenticatedUser();
   if (!user) redirect("/login");
-  return <KnowledgeOS currentUser={{ displayName: user.displayName, role: user.role }} />;
+  return <KnowledgeOS currentUser={{ id: user.id, displayName: user.displayName, role: user.role }} />;
 }
