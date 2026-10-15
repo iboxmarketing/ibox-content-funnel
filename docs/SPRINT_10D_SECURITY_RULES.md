@@ -75,18 +75,25 @@ Retries return the same Blog and the same review (key `head-review:<blogTaskId>`
   deployed, the start call fails and `POST /api/auth/telegram/start` returns
   `503 LOGIN_UNAVAILABLE`; a row without `display_code` is also refused, so a
   code-less login is never started.
-- The public start endpoint is limited at the Cloudflare edge by a Workers
-  Rate Limiting binding (`LOGIN_START_LIMITER`, 5 per 60 s) keyed on SHA-256
-  of Cloudflare's `CF-Connecting-IP` — the same hash the Task Bot's own limit
-  (5 per 15 min, at most 3 open challenges) uses; nothing the browser sends
-  selects either bucket.
-- **Known gap (Sprint 10E audit, MEDIUM):** the Task Bot contract asks for
-  `p_rate_key_hash` = HMAC over the client key with a server-only pepper;
-  Content OS currently sends plain SHA-256 of the IP. Functionally correct,
-  but an unpeppered hash of an IPv4 address is reversible from the stored
-  value (retained up to 7 days). To be fixed by adding a server-only pepper. A missing binding fails closed (503). Rate-limited responses are a
-  neutral `429 LOGIN_RATE_LIMITED` with `Retry-After`; the UI waits and never
-  retries automatically.
+- **Rate key (Sprint 10E-FIX):** `rateKeyHash = lowercase hex(HMAC-SHA-256(
+  key = CONTENT_OS_RATE_LIMIT_PEPPER, message = "content-os-login-rate-key:v1:"
+  + CF-Connecting-IP))` (`lib/auth/rate-key.ts`). The pepper is a Worker
+  secret binding (≥ 32 chars). The client IP comes only from Cloudflare's
+  `CF-Connecting-IP`; no browser header or body field selects the key. The
+  raw IP is never sent to the Task Bot, stored in its auth table, or logged —
+  only the 64-hex digest is. In production (https) a missing/short pepper or a
+  missing/malformed client IP fails closed (`503 LOGIN_UNAVAILABLE`); there is
+  no shared "unknown" bucket. Local development is explicit and
+  loopback-only (http on localhost / 127.0.0.1 / [::1]): an obviously named
+  development-only pepper and loopback client key are used when the real
+  values are absent; any other http origin is refused.
+- **Two limits, both enforced:** the Cloudflare edge (Workers Rate Limiting
+  binding `LOGIN_START_LIMITER`, 5 per 60 s, keyed `login-start:<rateKeyHash>`;
+  a missing binding fails closed) trips before any database call; the Task Bot
+  (5 creations per rolling 15 minutes and at most 3 outstanding challenges per
+  key) answers `PT429`. Both become a neutral `429 LOGIN_RATE_LIMITED` with
+  `Retry-After` (60 s at the edge, 300 s for the Task Bot window); the UI waits
+  (clamped to 10–300 s) and never retries automatically.
 - Expired, cancelled, consumed and unavailable challenges stop polling and
   discard the verifier; only an explicit "Qaytadan boshlash" creates a new
   challenge. Polling is bounded (1.5 s → 8 s backoff, ≤ 10 minutes, ≤ expiry).

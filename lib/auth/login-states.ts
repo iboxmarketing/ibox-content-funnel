@@ -28,3 +28,8 @@ export function pollDelayMs(attempt: number): number {
 export function shouldKeepPolling(now: number, startedAt: number, expiresAt: string): boolean {
   return now - startedAt < MAX_POLL_DURATION_MS && now < Date.parse(expiresAt);
 }
+
+/** "472851" -> "472 851" (display only). */
+export function formatConfirmationCode(code: string): string {
+  return /^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code;
+}

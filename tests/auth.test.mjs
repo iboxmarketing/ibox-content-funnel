@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash, createHmac } from "node:crypto";
 import { join } from "node:path";
 import ts from "typescript";
 
@@ -31,6 +32,7 @@ compile("../lib/auth/repository.ts", join(dir, "auth/repository.js"), (source) =
 
 compile("../lib/auth/session-cookie.ts", join(dir, "auth/session-cookie.js"));
 compile("../lib/auth/login-start.ts", join(dir, "auth/login-start.js"));
+compile("../lib/auth/rate-key.ts", join(dir, "auth/rate-key.js"));
 compile("../lib/auth/login-states.ts", join(dir, "auth/login-states.js"));
 const require = createRequire(import.meta.url);
 const { resolveContentOsAuthConfig, ContentOsAuthConfigError } = require(join(dir, "auth/config.js"));
@@ -118,7 +120,8 @@ test("auth repository uses the exact canonical Task Bot RPC contract and validat
 // --- Sprint 10D: matching code, rate limit, terminal states, __Host- cookie -------------------------
 
 const cookie = require(join(dir, "auth/session-cookie.js"));
-const { startLogin, loginRateKeyHash, formatConfirmationCode } = require(join(dir, "auth/login-start.js"));
+const { startLogin, formatConfirmationCode } = require(join(dir, "auth/login-start.js"));
+const rateKey = require(join(dir, "auth/rate-key.js"));
 const { challengeView, shouldKeepPolling, pollDelayMs, CONFIRMATION_INSTRUCTION } = require(join(dir, "auth/login-states.js"));
 const CHALLENGE = "9f0c1b7e-1111-4222-8333-444455556666";
 const pending = (extra = {}) => ({ challenge_id: CHALLENGE, status: "PENDING", expires_at: "2026-10-15T10:10:00.000Z", display_code: "472851", ...extra });
@@ -147,7 +150,7 @@ test("10D login start: edge limit refuses before any DB write; backend RATE_LIMI
   assert.equal(created, 0, "no challenge row is created when the edge limit trips");
   for (const refusal of [{ pgCode: "PT429", status: 429 }, { pgCode: "PT429" }, { status: 429 }]) {
     const backend = await startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => { throw Object.assign(new Error("login challenge rate limit exceeded"), refusal); } }, telegramBotUsername: "ibox_bot" });
-    assert.deepEqual(backend, { kind: "RATE_LIMITED", retryAfterSeconds: 60 }, "Task Bot PT429 is the neutral rate-limited state");
+    assert.deepEqual(backend, { kind: "RATE_LIMITED", retryAfterSeconds: 300 }, "Task Bot PT429 -> neutral rate limit with a bounded wait matching its 15-minute window");
   }
   await assert.rejects(() => startLogin({ verifierHash: "a".repeat(64), rateKeyHash: "c".repeat(64), limiter: allow, challenges: { createChallenge: async () => { throw Object.assign(new Error("down"), { status: 503 }); } }, telegramBotUsername: "ibox_bot" }), /down/, "other failures are not disguised as rate limiting");
   let seen;
@@ -155,12 +158,51 @@ test("10D login start: edge limit refuses before any DB write; backend RATE_LIMI
   assert.equal(seen, `login-start:${"c".repeat(64)}`, "edge and Task Bot limits use the same server-derived key");
 });
 
-test("10D rate key: derived server-side from CF-Connecting-IP only, hashed; client-chosen headers are ignored", async () => {
-  const key = await loginRateKeyHash(new Headers({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4", "x-rate-key": "mine" }));
-  assert.match(key, /^[0-9a-f]{64}$/, "64-hex, as the Task Bot RPC requires");
-  assert.ok(!key.includes("203.0.113.7"));
-  assert.equal(key, await loginRateKeyHash(new Headers({ "cf-connecting-ip": "203.0.113.7" })));
-  assert.equal(await loginRateKeyHash(new Headers({ "x-forwarded-for": "9.9.9.9" })), await loginRateKeyHash(new Headers({ "x-forwarded-for": "8.8.8.8" })), "without the Cloudflare header, client headers cannot pick a fresh bucket");
+const PEPPER = "fixture-pepper-for-tests-only-0123456789abcdef";
+const PROD = "https://ibox-content-os.example.workers.dev/api/auth/telegram/start";
+const DEV = "http://127.0.0.1:8787/api/auth/telegram/start";
+const derive = (headers, options = {}) => rateKey.deriveLoginRateKey({
+  requestUrl: options.url ?? PROD,
+  headers: new Headers(headers),
+  pepper: "pepper" in options ? options.pepper : PEPPER,
+});
+
+test("10E rate key: HMAC-SHA-256(pepper, Cloudflare client IP) — fixed fixture, lowercase 64-hex", async () => {
+  const result = await derive({ "cf-connecting-ip": "203.0.113.7" });
+  const expected = createHmac("sha256", PEPPER).update("content-os-login-rate-key:v1:203.0.113.7").digest("hex");
+  assert.deepEqual(result, { ok: true, rateKeyHash: expected, mode: "production" });
+  assert.equal(result.rateKeyHash, "68be0eb9ca54cac0106ca408825e65661051189c3d8e469c6877577eb3f7f06b", "pinned digest (openssl dgst -sha256 -hmac)");
+  assert.match(result.rateKeyHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(result.rateKeyHash, createHash("sha256").update("203.0.113.7").digest("hex"), "not a plain (reversible) SHA-256 of the IP");
+  assert.ok(!result.rateKeyHash.includes("203"));
+});
+
+test("10E rate key: same IP+pepper -> same; different IP -> different; different pepper -> different", async () => {
+  const a = (await derive({ "cf-connecting-ip": "203.0.113.7" })).rateKeyHash;
+  assert.equal((await derive({ "cf-connecting-ip": "203.0.113.7" })).rateKeyHash, a);
+  assert.notEqual((await derive({ "cf-connecting-ip": "203.0.113.8" })).rateKeyHash, a);
+  assert.notEqual((await derive({ "cf-connecting-ip": "203.0.113.7" }, { pepper: "another-fixture-pepper-0123456789abcdefgh" })).rateKeyHash, a);
+  assert.equal((await derive({ "cf-connecting-ip": "2001:DB8::1" })).rateKeyHash, (await derive({ "cf-connecting-ip": "2001:db8::1" })).rateKeyHash, "IPv6 case-normalized");
+});
+
+test("10E rate key: browser-supplied IP headers and rate keys are ignored; only CF-Connecting-IP counts", async () => {
+  const base = (await derive({ "cf-connecting-ip": "203.0.113.7" })).rateKeyHash;
+  const forged = await derive({ "cf-connecting-ip": "203.0.113.7", "x-forwarded-for": "1.2.3.4", "x-real-ip": "5.6.7.8", "true-client-ip": "9.9.9.9", "x-rate-key": "a".repeat(64) });
+  assert.equal(forged.rateKeyHash, base);
+  const noCf = await derive({ "x-forwarded-for": "1.2.3.4", "x-rate-key": "a".repeat(64) });
+  assert.deepEqual(noCf, { ok: false, reason: "CLIENT_IP_MISSING" }, "no Cloudflare IP in production -> fail closed, never an 'unknown' bucket");
+  assert.deepEqual(await derive({ "cf-connecting-ip": "not an ip; drop table" }), { ok: false, reason: "CLIENT_IP_MISSING" });
+});
+
+test("10E rate key: missing / short pepper in production fails closed; development is explicit and loopback-only", async () => {
+  for (const pepper of [undefined, "", "   ", "too-short-pepper"]) {
+    assert.deepEqual(await derive({ "cf-connecting-ip": "203.0.113.7" }, { pepper }), { ok: false, reason: "PEPPER_MISSING" }, String(pepper));
+  }
+  const dev = await derive({}, { url: DEV, pepper: undefined });
+  assert.equal(dev.mode, "development");
+  assert.equal(dev.rateKeyHash, createHmac("sha256", rateKey.DEVELOPMENT_RATE_LIMIT_PEPPER).update(`content-os-login-rate-key:v1:${rateKey.DEVELOPMENT_CLIENT_KEY}`).digest("hex"));
+  assert.deepEqual(await derive({ "cf-connecting-ip": "203.0.113.7" }, { url: "http://ibox.example/api/auth/telegram/start", pepper: PEPPER }), { ok: false, reason: "INSECURE_ORIGIN" }, "the development path never applies off loopback");
+  assert.notEqual((await derive({ "cf-connecting-ip": "203.0.113.7" }, { url: DEV, pepper: undefined })).rateKeyHash, (await derive({ "cf-connecting-ip": "203.0.113.7" })).rateKeyHash, "the development pepper never equals production");
 });
 
 test("10D repository: Task Bot display_code contract; malformed codes rejected", async () => {

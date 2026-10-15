@@ -2,7 +2,8 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { createServerAuthRepository } from "@/lib/auth/server";
 import { readSameOriginJson } from "@/lib/auth/request-security";
-import { loginRateKeyHash, startLogin } from "@/lib/auth/login-start";
+import { startLogin } from "@/lib/auth/login-start";
+import { deriveLoginRateKey } from "@/lib/auth/rate-key";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -29,11 +30,22 @@ export async function POST(request: Request) {
     return Response.json({ code: "LOGIN_UNAVAILABLE", error: "Login is temporarily unavailable." }, { status: 503, headers: noStore });
   }
 
+  // Server-derived rate key: HMAC(pepper secret, Cloudflare client IP). Fail closed without either in production.
+  const rateKey = await deriveLoginRateKey({
+    requestUrl: request.url,
+    headers: request.headers,
+    pepper: (env as unknown as { CONTENT_OS_RATE_LIMIT_PEPPER?: string }).CONTENT_OS_RATE_LIMIT_PEPPER,
+  });
+  if (!rateKey.ok) {
+    log(`rate_key_unavailable:${rateKey.reason.toLowerCase()}`);
+    return Response.json({ code: "LOGIN_UNAVAILABLE", error: "Login is temporarily unavailable." }, { status: 503, headers: noStore });
+  }
+
   try {
     const { config, repository } = createServerAuthRepository();
     const result = await startLogin({
       verifierHash: input.data.verifierHash,
-      rateKeyHash: await loginRateKeyHash(request.headers),
+      rateKeyHash: rateKey.rateKeyHash,
       limiter,
       challenges: repository,
       telegramBotUsername: config.telegramBotUsername,

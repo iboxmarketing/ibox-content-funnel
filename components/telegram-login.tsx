@@ -5,9 +5,9 @@ import { ExternalLink, LoaderCircle, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { randomOpaqueToken, sha256Hex } from "@/lib/auth/crypto";
 import { useRouter } from "next/navigation";
-import { formatConfirmationCode } from "@/lib/auth/login-start";
 import {
   CONFIRMATION_INSTRUCTION,
+  formatConfirmationCode,
   RATE_LIMITED_MESSAGE,
   challengeView,
   pollDelayMs,
