@@ -52,6 +52,11 @@ export function resolveTaskBackendServiceAuthConfig(env: EnvLike): TaskBackendSe
   if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
     throw new TaskBackendServiceAuthConfigError("TASK_BACKEND_BASE_URL must be https:// outside local development.");
   }
+  // The Task Bot verifies the signature over the request path; a base URL with its own
+  // path, query or credentials would make the signed path differ from the sent one.
+  if ((parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash || parsed.username || parsed.password) {
+    throw new TaskBackendServiceAuthConfigError("TASK_BACKEND_BASE_URL must be a bare origin (scheme://host[:port]) with no path, query or credentials.");
+  }
 
-  return { baseUrl, secret };
+  return { baseUrl: parsed.origin, secret };
 }

@@ -1,3 +1,5 @@
+import { assertSupabaseTarget, DeploymentTargetError } from "../deployment-target";
+
 export type EnvLike = Readonly<Record<string, string | undefined>>;
 
 export interface ContentOsAuthConfig {
@@ -42,6 +44,12 @@ export function resolveContentOsAuthConfig(env: EnvLike): ContentOsAuthConfig {
   }
   if (parsedUrl.protocol !== "https:") {
     throw new ContentOsAuthConfigError(`${CONTENT_OS_AUTH_ENV.supabaseUrl} must be a valid https:// URL.`);
+  }
+  try {
+    assertSupabaseTarget(env, parsedUrl.origin);
+  } catch (error) {
+    if (error instanceof DeploymentTargetError) throw new ContentOsAuthConfigError(error.message);
+    throw error;
   }
   if (!/^[A-Za-z0-9_]{5,32}$/.test(telegramBotUsername as string)) {
     throw new ContentOsAuthConfigError(`${CONTENT_OS_AUTH_ENV.telegramBotUsername} is not a valid Telegram bot username.`);

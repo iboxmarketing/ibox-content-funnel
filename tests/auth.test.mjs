@@ -18,6 +18,7 @@ function compile(from, to, transform = (source) => source) {
   }).outputText);
 }
 
+compile("../lib/deployment-target.ts", join(dir, "deployment-target.js"));
 compile("../lib/auth/config.ts", join(dir, "auth/config.js"));
 compile("../lib/auth/crypto.ts", join(dir, "auth/crypto.js"));
 compile("../lib/auth/request-security.ts", join(dir, "auth/request-security.js"));

@@ -9,6 +9,8 @@
  * boundary. The persistence layer receives only the already-validated
  * public.users.id; it does not accept external identity assertions.
  */
+import { assertSupabaseTarget, DeploymentTargetError } from "../deployment-target";
+
 export type EnvLike = Readonly<Record<string, string | undefined>>;
 
 export interface ContentOsPersistenceConfig {
@@ -44,5 +46,11 @@ export function resolveContentOsPersistenceConfig(env: EnvLike): ContentOsPersis
   ].filter(Boolean);
   if (missing.length) throw new ContentOsPersistenceConfigError(`Content OS persistence is enabled but ${missing.join(", ")} ${missing.length > 1 ? "are" : "is"} missing.`);
   if (!/^https:\/\//.test(supabaseUrl as string)) throw new ContentOsPersistenceConfigError(`${CONTENT_OS_PERSISTENCE_ENV.supabaseUrl} must be an https:// URL.`);
+  try {
+    assertSupabaseTarget(env, supabaseUrl as string);
+  } catch (error) {
+    if (error instanceof DeploymentTargetError) throw new ContentOsPersistenceConfigError(error.message);
+    throw error;
+  }
   return { supabaseUrl: supabaseUrl as string, serviceRoleKey: serviceRoleKey as string };
 }

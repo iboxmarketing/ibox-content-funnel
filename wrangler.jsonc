@@ -6,7 +6,8 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
-  // Public login start is limited per client at the edge (key = SHA-256 of CF-Connecting-IP).
+  // Public login start is limited per client at the edge
+  // (key = HMAC-SHA-256(CONTENT_OS_RATE_LIMIT_PEPPER, CF-Connecting-IP); lib/auth/rate-key.ts).
   "ratelimits": [
     { "name": "LOGIN_START_LIMITER", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }
   ],
@@ -20,6 +21,37 @@
     "logs": {
       "enabled": true,
       "invocation_logs": true
+    }
+  },
+  // Staging: build with CLOUDFLARE_ENV=staging so the generated dist/server/wrangler.json
+  // is the staging Worker "ibox-content-os-staging" (top-level name + "-staging"),
+  // then deploy that generated config. Bindings and vars are not inherited, so every
+  // one the app needs is declared here explicitly.
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "preview_urls": false,
+      "ratelimits": [
+        // A namespace distinct from production's 1001: counters are shared per account by namespace id.
+        { "name": "LOGIN_START_LIMITER", "namespace_id": "STAGING_NAMESPACE_ID_PLACEHOLDER", "simple": { "limit": 5, "period": 60 } }
+      ],
+      "vars": {
+        // Non-secret fail-closed guard: the Worker refuses any Supabase project other than staging.
+        "CONTENT_OS_DEPLOYMENT_ENV": "staging",
+        "CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF": "yuznbaaoonyqonhiywkt"
+      },
+      "assets": {
+        "directory": "dist/client",
+        "not_found_handling": "none",
+        "binding": "ASSETS"
+      },
+      "observability": {
+        "enabled": true,
+        "logs": {
+          "enabled": true,
+          "invocation_logs": true
+        }
+      }
     }
   }
 }
