@@ -305,6 +305,22 @@ export class InMemoryOperationalTaskGateway implements OperationalTaskGateway {
     if (facts?.code === BLOG_TASK_TYPE_CODE && newStatus === "DONE") {
       throw new TransitionRejectedError("PT409", "Content OS Blog completion requires the dedicated Head Review RPC");
     }
+    // Task Bot 10E (task_events_enforce_content_os_head_review_actor): a Head Review's own
+    // lifecycle moves only by its assigned reviewer, never the source Blog's author; revision
+    // from REVIEW also by a non-author Head; cancel/reopen are Head administration.
+    if (facts?.code === HEAD_REVIEW_TASK_TYPE_CODE) {
+      const author = facts.runtime.sourceTaskId ? this.tasks.get(facts.runtime.sourceTaskId)?.assigneeId : undefined;
+      const head = actor.role === "HEAD_OF_MARKETING";
+      if (newStatus === "CANCELLED" || ((from === "DONE" || from === "CANCELLED") && newStatus === "ASSIGNED")) {
+        if (!head) throw new TransitionRejectedError("42501", "only active Head may perform this Head Review administration");
+      } else if (from === "REVIEW" && newStatus === "REVISION") {
+        if (actorId === author || (actorId !== task.assigneeId && !head)) {
+          throw new TransitionRejectedError("42501", "only the independent reviewer or non-author Head may request revision");
+        }
+      } else if (actorId !== task.assigneeId || actorId === author) {
+        throw new TransitionRejectedError("42501", "only the active assigned reviewer may move the Head Review lifecycle");
+      }
+    }
 
     if (allowed && newStatus === "DONE" && facts) {
       const source = facts.runtime.sourceTaskId ? await loadContentOsTaskFacts(facts.runtime.sourceTaskId, this.store, this) : null;

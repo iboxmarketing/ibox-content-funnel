@@ -18,6 +18,7 @@ mkdirSync(join(dir, "persistence"));
 symlinkSync(new URL("../node_modules", import.meta.url).pathname, join(dir, "node_modules"), "dir"); // zod for blog-review-api
 const compile = (from, to) => writeFileSync(to, ts.transpileModule(readFileSync(new URL(from, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText);
 compile("../lib/content-entity.ts", join(dir, "content-entity.js"));
+compile("../lib/deployment-target.ts", join(dir, "deployment-target.js"));
 for (const name of ["task-type-codes", "ports", "idempotency", "transition-contract", "memory-adapter", "supabase-adapter", "blog-review-flow", "config", "blog-review-api"]) {
   compile(`../lib/persistence/${name}.ts`, join(dir, "persistence", `${name}.js`));
 }
@@ -440,4 +441,25 @@ test("10E review matrix (BlogReviewFlow): assigned reviewer approves; Head appro
   await assert.rejects(() => w.flow.approve({ reviewTaskId, actorId: HEAD }), /author cannot decide/);
   await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "x" }), /author cannot decide/);
   assert.equal((await w.flow.approve({ reviewTaskId, actorId: REVIEWER })).headReviewStatus, "DONE", "the independent reviewer decides");
+});
+
+test("11B: frozen Task Bot rule — a supervising Head sends back only after the reviewer picked the review up; Head never picks it up for them", async () => {
+  const w = world();
+  const { blogTaskId } = await start(w);
+  const { headReviewTaskId: reviewTaskId } = await complete(w, blogTaskId);
+  await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "first pass" });
+  await complete(w, blogTaskId); // resubmitted: the SAME review is ASSIGNED again
+  assert.equal((await w.tasks.getTask(reviewTaskId)).status, "ASSIGNED");
+  const sent = w.tasks.transitions.length;
+  await assert.rejects(() => w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "supervisory" }), /assigned reviewer must pick up/);
+  assert.equal(w.tasks.transitions.length, sent, "nothing sent on the reviewer's behalf");
+  await assert.rejects(() => w.tasks.transition(reviewTaskId, HEAD, "IN_PROGRESS"), /only the active assigned reviewer may move/, "the Task Bot refuses a Head pick-up");
+  await assert.rejects(() => w.tasks.transition(reviewTaskId, HEAD, "DONE"), /assigned reviewer|changed concurrently/, "and a Head approval");
+  // Once the reviewer works on it, Head may send it back.
+  const again = await w.flow.requestRevision({ reviewTaskId, actorId: REVIEWER, note: "reviewer picks up and sends back" });
+  assert.deepEqual([again.blogStatus, again.headReviewStatus], ["REVISION", "BLOCKED"]);
+  await complete(w, blogTaskId);
+  await w.tasks.transition(reviewTaskId, REVIEWER, "IN_PROGRESS");
+  const supervisory = await w.flow.requestRevision({ reviewTaskId, actorId: HEAD, note: "supervisory, review in progress" });
+  assert.deepEqual([supervisory.blogStatus, supervisory.headReviewStatus], ["REVISION", "BLOCKED"]);
 });

@@ -50,7 +50,7 @@ body field can name an actor or creator.
   | Actor | Pick up | Request revision | Approve | Reassign the review |
   |---|---|---|---|---|
   | Assigned reviewer (not the author) | yes | yes | yes | — |
-  | Head, not the author, not assigned | — | yes (supervisory) | **no** | yes (never to the author) |
+  | Head, not the author, not assigned | — | yes (supervisory), once the reviewer has picked the review up (`IN_PROGRESS`) | **no** | yes (never to the author) |
   | Head, not the author, assigned | yes | yes | yes | yes |
   | Head who wrote the Blog | — | **no** | **no** | yes, to another valid reviewer only |
   | Ordinary Blog author | — | no | no | no |
@@ -58,9 +58,11 @@ body field can name an actor or creator.
 
   Content OS enforces this in the server capability policy and in
   `BlogReviewFlow` (the UI renders only server capabilities). The Task Bot
-  database currently still lets an active Head move or complete any Head
-  Review and lets a Head-author be chosen as reviewer; Codex is aligning the
-  Task Bot with this decision.
+  enforces the same matrix in the database from `3bd2ca7`
+  (`task_events_enforce_content_os_head_review_actor`, review-assignment
+  independence trigger, `content_os_revision_allowed` requiring an
+  `IN_PROGRESS` review): only the assigned reviewer moves the review's own
+  lifecycle, so Content OS never picks a review up on a reviewer's behalf.
 
 ## 3. Blog completion invariant
 

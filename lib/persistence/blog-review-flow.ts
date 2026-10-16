@@ -202,7 +202,11 @@ export class BlogReviewFlow {
         throw new ContentOsRuleError("this Head Review may not send this Blog back for revision now");
       }
       if (review.task.status === "ASSIGNED") {
-        // The reviewer picks the review up again (legacy ACCEPT) before deciding.
+        // Only the assigned reviewer may pick the review up (Task Bot 10E event-actor rule);
+        // a supervising Head can send the Blog back once the reviewer is working on it.
+        if (review.task.assigneeId !== input.actorId) {
+          throw new ContentOsRuleError("the assigned reviewer must pick up this Head Review before a supervisory revision");
+        }
         await this.tasks.transition(review.task.id, input.actorId, "IN_PROGRESS");
         review = await this.requireFacts(input.reviewTaskId, HEAD_REVIEW_TASK_TYPE_CODE);
       }

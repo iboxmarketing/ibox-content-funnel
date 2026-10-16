@@ -241,3 +241,12 @@ test("10E review matrix (API): Head-author cannot hand the review to themselves;
   assert.deepEqual(await forwarded(w, { action: "direct-reassign", taskId: HR, assigneeId: OTHER.id }, HEAD), ["directReassign", HR, OTHER.id]);
   await refused(w, { action: "lifecycle", taskId: HR, taskAction: "APPROVE" }, HEAD, 409, "WORKFLOW_TASK");
 });
+
+test("11B: capability matrix on an ASSIGNED review follows the frozen Task Bot (Head supervises only after pick-up)", () => {
+  const w = world();
+  const cls = { kind: "CONTENT_OS", code: "HEAD_REVIEW", sourceTaskId: BLOG, blogAuthorId: AUTHOR.id, sourceStatus: "DONE", reviewerId: null };
+  const caps = (actor, status) => computeTaskCapabilities(actor, { ...w.tasks.get(HR), assigneeId: REVIEWER.id, status }, false, cls, { workflowApiEnabled: true });
+  assert.deepEqual(caps(HEAD, "ASSIGNED").workflowActions, [], "not offered: it would be refused by the Task Bot");
+  assert.deepEqual(caps(HEAD, "IN_PROGRESS").workflowActions, ["REVIEW_REQUEST_REVISION"]);
+  assert.deepEqual(caps(REVIEWER, "ASSIGNED").workflowActions, ["REVIEW_APPROVE", "REVIEW_REQUEST_REVISION"]);
+});

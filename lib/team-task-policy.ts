@@ -108,7 +108,11 @@ function workflowActions(actor: PolicyActor, task: TaskBackendTask, classificati
     const actions: WorkflowAction[] = [];
     const reviewer = actor.id === task.assigneeId;
     if (reviewer && ["ASSIGNED", "IN_PROGRESS", "REVIEW"].includes(task.status)) actions.push("REVIEW_APPROVE");
-    if ((reviewer || isHead(actor)) && ["ASSIGNED", "IN_PROGRESS"].includes(task.status)) actions.push("REVIEW_REQUEST_REVISION");
+    // The reviewer may send back from ASSIGNED (picking it up) or IN_PROGRESS; a supervising
+    // non-author Head only once the reviewer has picked it up (IN_PROGRESS) — Task Bot 10E rule.
+    if ((reviewer && ["ASSIGNED", "IN_PROGRESS"].includes(task.status)) || (isHead(actor) && task.status === "IN_PROGRESS")) {
+      actions.push("REVIEW_REQUEST_REVISION");
+    }
     return actions;
   }
   return [];
