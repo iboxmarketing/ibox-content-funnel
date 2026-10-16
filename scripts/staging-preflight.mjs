@@ -18,7 +18,9 @@ export const STAGING = {
   supabaseRef: "yuznbaaoonyqonhiywkt",
   forbiddenRefs: ["cbjcclefgxrdyjwkjcpq"], // production Supabase
   productionNamespaceId: "1001",
-  taskBotHost: /^ibox-task-bot-staging\.[a-z0-9-]+\.workers\.dev$/,
+  stagingNamespaceId: "1101", // owner-selected (Sprint 11B-B2)
+  taskBotOrigin: "https://ibox-task-bot-staging.lively-river-afba.workers.dev",
+  contentOsOrigin: "https://ibox-content-os-staging.lively-river-afba.workers.dev",
 };
 
 const REQUIRED_SECRETS = [
@@ -67,7 +69,7 @@ export function checkWorkerConfig(config) {
     ["nodejs_compat enabled", (config.compatibility_flags ?? []).includes("nodejs_compat")],
     ["observability enabled", config.observability?.enabled === true],
     ["login rate limiter bound (5 / 60 s)", limiter?.simple?.limit === 5 && limiter?.simple?.period === 60],
-    ["staging rate-limit namespace is a confirmed integer, not production's", /^[1-9]\d*$/.test(String(limiter?.namespace_id ?? "")) && String(limiter.namespace_id) !== STAGING.productionNamespaceId],
+    ["staging rate-limit namespace is the owner-selected 1101 (never production's 1001)", String(limiter?.namespace_id ?? "") === STAGING.stagingNamespaceId && STAGING.stagingNamespaceId !== STAGING.productionNamespaceId],
     ["deployment env var pinned to staging", config.vars?.CONTENT_OS_DEPLOYMENT_ENV === "staging"],
     ["expected Supabase project pinned to staging", config.vars?.CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF === STAGING.supabaseRef],
     ["no secret-like plain vars", !Object.keys(config.vars ?? {}).some((k) => /SECRET|KEY$|PEPPER|TOKEN|PASSWORD|SERVICE_ROLE/.test(k) && k !== "CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF")],
@@ -88,7 +90,7 @@ export function checkSecrets(secrets) {
     ["persistence and service auth explicitly enabled", secrets.CONTENT_OS_PERSISTENCE_ENABLED === "true" && secrets.TASK_BACKEND_SERVICE_AUTH_ENABLED === "true"],
     ["Supabase URL is exactly the staging project", supabase !== null && supabase.origin === `https://${STAGING.supabaseRef}.supabase.co` && isOrigin(supabase)],
     ["no production Supabase ref anywhere", !values.some((v) => STAGING.forbiddenRefs.some((ref) => v.includes(ref)))],
-    ["Task Bot URL is a bare https origin on the staging workers.dev host", taskBot !== null && taskBot.protocol === "https:" && isOrigin(taskBot) && STAGING.taskBotHost.test(taskBot.hostname)],
+    ["Task Bot URL is exactly the staging Task Bot origin", taskBot !== null && isOrigin(taskBot) && taskBot.origin === STAGING.taskBotOrigin],
     ["rate-limit pepper is at least 32 characters", (secrets.CONTENT_OS_RATE_LIMIT_PEPPER ?? "").trim().length >= 32],
     ["service-auth shared secret is at least 32 characters", (secrets.CONTENT_OS_TASK_BACKEND_SECRET ?? "").trim().length >= 32],
     ["Telegram bot username is well formed", /^@?[A-Za-z0-9_]{5,32}$/.test(secrets.CONTENT_OS_TELEGRAM_BOT_USERNAME ?? "")],

@@ -10,7 +10,7 @@ frozen candidate `746b45633d45ddb43068d04380a86a7baa223855`.
 | Finding | Effect on staging | Change |
 |---|---|---|
 | Deploying with `--config wrangler.staging.local.jsonc` (Sprint 11A handoff) fails: wrangler cannot find the entry point `vinext/server/fetch-handler`; the tested artifact is the Vite build in `dist/server` with a generated `wrangler.json`. | No staging deploy could succeed that way. | `wrangler.jsonc` `env.staging`; build with `CLOUDFLARE_ENV=staging`; deploy the generated config. |
-| The generated config always used production's name and limiter namespace `1001`; `--name` alone does not change the namespace. | Staging would share production's login rate-limit counters. | `env.staging` declares its own `LOGIN_START_LIMITER` namespace (owner must set it, see §5). |
+| The generated config always used production's name and limiter namespace `1001`; `--name` alone does not change the namespace. | Staging would share production's login rate-limit counters. | `env.staging` declares its own `LOGIN_START_LIMITER` namespace 1101 (owner-selected, §5). |
 | Nothing tied a deployment to one Supabase project. | A staging Worker given the production URL would use it. | `CONTENT_OS_DEPLOYMENT_ENV=staging` + `CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF=yuznbaaoonyqonhiywkt` pinned in `env.staging`; any other Supabase URL fails closed (503). |
 | `TASK_BACKEND_BASE_URL` with a trailing slash or path produced a signed path different from the sent path (signature mismatch, 401). | Fragile Task Bot integration. | The base URL is normalized to its origin; a path/query/credentials are rejected. |
 | Content OS offered a non-assigned Head "Request revision" on an ASSIGNED review and picked it up as Head; the frozen Task Bot (`3bd2ca7`) refuses that. | 403 in staging acceptance. | Supervisory revision only once the reviewer picked the review up (`ac57fe9`). |
@@ -20,13 +20,13 @@ frozen candidate `746b45633d45ddb43068d04380a86a7baa223855`.
 | Item | Value |
 |---|---|
 | Worker | `ibox-content-os-staging` (top-level `ibox-content-os` + env `staging`) |
-| Hostname | `https://ibox-content-os-staging.<account-subdomain>.workers.dev` only |
+| Hostname | `https://ibox-content-os-staging.lively-river-afba.workers.dev` only (Worker already exists; currently a 503 placeholder) |
 | `workers_dev` / `preview_urls` | `true` / `false` |
 | Routes / custom domains | none |
 | Compatibility | `2026-10-06`, `nodejs_compat` |
 | Observability | enabled (logs + invocation logs) |
 | Assets binding | `ASSETS` → `dist/client` |
-| Rate-limit binding | `LOGIN_START_LIMITER`, 5 / 60 s, **staging namespace id (owner input)** |
+| Rate-limit binding | `LOGIN_START_LIMITER`, 5 / 60 s, namespace **1101** (owner-selected; production keeps 1001) |
 | Plain vars (in `wrangler.jsonc`) | `CONTENT_OS_DEPLOYMENT_ENV=staging`, `CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF=yuznbaaoonyqonhiywkt` |
 
 ## 3. Runtime bindings read by the current code
@@ -36,11 +36,11 @@ frozen candidate `746b45633d45ddb43068d04380a86a7baa223855`.
 | `CONTENT_OS_SUPABASE_URL` | auth, persistence, workflow classifier | Supabase value (plain) | **Required**: exactly `https://yuznbaaoonyqonhiywkt.supabase.co` |
 | `CONTENT_OS_SUPABASE_SERVICE_ROLE_KEY` | same | **Secret** (Supabase) | **Required**: staging project's service-role key |
 | `CONTENT_OS_TELEGRAM_BOT_USERNAME` | login deep link `t.me/<bot>?start=contentos_<challenge>` | Plain config | **Required**: the staging bot |
-| `CONTENT_OS_RATE_LIMIT_PEPPER` | login rate key (`lib/auth/rate-key.ts`, `cloudflare:workers` env) | **Secret** | **Required**, ≥ 32 chars (already set on the staging Worker) |
+| `CONTENT_OS_RATE_LIMIT_PEPPER` | login rate key (`lib/auth/rate-key.ts`, `cloudflare:workers` env) | **Secret** | **Required**, ≥ 32 chars — **already provisioned** on the staging Worker |
 | `CONTENT_OS_PERSISTENCE_ENABLED` | Blog review API | Plain config | **Required**: `true` |
 | `TASK_BACKEND_SERVICE_AUTH_ENABLED` | team-task client | Plain config | **Required**: `true` |
-| `TASK_BACKEND_BASE_URL` | team-task client | Task Bot value (plain) | **Required**: bare origin `https://ibox-task-bot-staging.<subdomain>.workers.dev` |
-| `CONTENT_OS_TASK_BACKEND_SECRET` | request signing | **Secret** | **Required**: same value as the staging Task Bot's `CONTENT_OS_SERVICE_SECRET` |
+| `TASK_BACKEND_BASE_URL` | team-task client | Task Bot value (plain) | **Required**: exactly `https://ibox-task-bot-staging.lively-river-afba.workers.dev` (bare origin, no trailing path) |
+| `CONTENT_OS_TASK_BACKEND_SECRET` | request signing | **Secret** | **Required**: same value as the staging Task Bot's `CONTENT_OS_SERVICE_SECRET` — **already provisioned** on the staging Worker |
 | `CONTENT_OS_DEPLOYMENT_ENV`, `CONTENT_OS_EXPECTED_SUPABASE_PROJECT_REF` | deployment-target guard | Generated staging-only plain vars | From `wrangler.jsonc`; must NOT be set as secrets |
 | `LOGIN_START_LIMITER`, `ASSETS` | login start, static assets | Bindings | From `wrangler.jsonc` |
 | `GOOGLE_SHEET_ID`, `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY` (secret), `DATA_SOURCE` | legacy Sheets routes (`/api/knowledge`, `/api/production`, `/api/catalog-preview`) | Deprecated / out of staging scope | Leave unset (those routes then answer 503) |
@@ -63,12 +63,19 @@ any `NEXT_PUBLIC_*` value.
 - Session cookie: `__Host-content_os_session` (Secure, HttpOnly, `Path=/`, no
   Domain, `SameSite=Strict`) on https; no cookie on any non-loopback http.
 
-## 5. Owner input still required
+## 5. External staging facts (recorded Sprint 11B-B2)
 
-`env.staging.ratelimits[0].namespace_id` is the placeholder
-`STAGING_NAMESPACE_ID_PLACEHOLDER`. The owner chooses an unused positive
-integer for this account (not `1001`) and commits it on this branch. The
-preflight refuses to pass until then.
+| Fact | Value |
+|---|---|
+| Content OS staging Worker | `ibox-content-os-staging`, origin `https://ibox-content-os-staging.lively-river-afba.workers.dev`, Preview URLs off |
+| Task Bot staging origin (`TASK_BACKEND_BASE_URL`) | `https://ibox-task-bot-staging.lively-river-afba.workers.dev` |
+| Supabase staging project | `yuznbaaoonyqonhiywkt` |
+| Secrets already on the staging Worker | `CONTENT_OS_RATE_LIMIT_PEPPER`, `CONTENT_OS_TASK_BACKEND_SECRET` (values never in this repository) |
+| Staging rate-limit namespace | `1101` (owner-selected); production `1001` unchanged |
+
+Because `--secrets-file` uploads additively, the operator's secrets file must
+still contain every Required binding of §3 for the preflight; the two
+already-provisioned secrets may be re-supplied with their existing values.
 
 ## 6. Deploy commands (staging only; execute only in the approved run)
 

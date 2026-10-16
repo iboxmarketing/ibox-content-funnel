@@ -56,7 +56,7 @@ test("auth and persistence config resolvers fail closed on a wrong Supabase targ
 
 test("Task Bot base URL is normalized to a bare origin so the signed path always equals the sent path", () => {
   const resolve = (url) => resolveTaskBackendServiceAuthConfig({ TASK_BACKEND_SERVICE_AUTH_ENABLED: "true", TASK_BACKEND_BASE_URL: url, CONTENT_OS_TASK_BACKEND_SECRET: "s".repeat(40) });
-  const origin = "https://ibox-task-bot-staging.example-sub.workers.dev";
+  const origin = "https://ibox-task-bot-staging.lively-river-afba.workers.dev";
   assert.equal(resolve(origin).baseUrl, origin);
   assert.equal(resolve(`${origin}/`).baseUrl, origin, "a trailing slash would have produced //api/... and a 401");
   for (const bad of [`${origin}/prefix`, `${origin}/?x=1`, `${origin}#f`, "https://user:pw@ibox-task-bot-staging.example-sub.workers.dev"]) {
@@ -68,7 +68,7 @@ test("Task Bot base URL is normalized to a bare origin so the signed path always
 const goodConfig = () => ({
   name: "ibox-content-os-staging", targetEnvironment: "staging", workers_dev: true, preview_urls: false,
   compatibility_flags: ["nodejs_compat"], observability: { enabled: true },
-  ratelimits: [{ name: "LOGIN_START_LIMITER", namespace_id: "4242", simple: { limit: 5, period: 60 } }],
+  ratelimits: [{ name: "LOGIN_START_LIMITER", namespace_id: "1101", simple: { limit: 5, period: 60 } }],
   vars: { ...stagingVars },
 });
 const goodSecrets = () => ({
@@ -78,7 +78,7 @@ const goodSecrets = () => ({
   CONTENT_OS_TELEGRAM_BOT_USERNAME: "ibox_staging_bot",
   CONTENT_OS_RATE_LIMIT_PEPPER: "fixture-pepper-not-real-0123456789abcdef",
   TASK_BACKEND_SERVICE_AUTH_ENABLED: "true",
-  TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.example-sub.workers.dev",
+  TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.lively-river-afba.workers.dev",
   CONTENT_OS_TASK_BACKEND_SECRET: "fixture-shared-secret-not-real-0123456789",
 });
 const failing = (results) => results.filter(([, ok]) => !ok).map(([name]) => name);
@@ -88,10 +88,10 @@ test("staging preflight: the generated Worker config must be exactly the staging
   assert.deepEqual(failing(checkWorkerConfig({ ...goodConfig(), name: "ibox-content-os" })), ["worker name is ibox-content-os-staging"]);
   assert.deepEqual(failing(checkWorkerConfig({ ...goodConfig(), preview_urls: true })), ["preview URLs disabled"]);
   assert.deepEqual(failing(checkWorkerConfig({ ...goodConfig(), routes: [{ pattern: "content.ibox.uz/*" }] })), ["no routes / custom domains"]);
-  for (const namespace of ["1001", "STAGING_NAMESPACE_ID_PLACEHOLDER", "0"]) {
+  for (const namespace of ["1001", "STAGING_NAMESPACE_ID_PLACEHOLDER", "0", "4242"]) {
     const config = goodConfig();
     config.ratelimits[0].namespace_id = namespace;
-    assert.deepEqual(failing(checkWorkerConfig(config)), ["staging rate-limit namespace is a confirmed integer, not production's"], namespace);
+    assert.deepEqual(failing(checkWorkerConfig(config)), ["staging rate-limit namespace is the owner-selected 1101 (never production's 1001)"], namespace);
   }
   assert.ok(failing(checkWorkerConfig({ ...goodConfig(), vars: { ...stagingVars, CONTENT_OS_RATE_LIMIT_PEPPER: "x" } })).includes("no secret-like plain vars"));
 });
@@ -99,9 +99,9 @@ test("staging preflight: the generated Worker config must be exactly the staging
 test("staging preflight: secrets can only target staging Supabase and the staging Task Bot; values never printed", () => {
   assert.deepEqual(failing(checkSecrets(goodSecrets())), []);
   assert.deepEqual(failing(checkSecrets({ ...goodSecrets(), CONTENT_OS_SUPABASE_URL: PRODUCTION_URL })), ["Supabase URL is exactly the staging project", "no production Supabase ref anywhere"]);
-  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot.vercel.app" })).includes("Task Bot URL is a bare https origin on the staging workers.dev host"));
-  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.example-sub.workers.dev/" })).length === 0, "a trailing slash is still an origin");
-  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.example-sub.workers.dev/api" })).includes("Task Bot URL is a bare https origin on the staging workers.dev host"));
+  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot.vercel.app" })).includes("Task Bot URL is exactly the staging Task Bot origin"));
+  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.lively-river-afba.workers.dev/" })).length === 0, "a trailing slash is still an origin");
+  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.lively-river-afba.workers.dev/api" })).includes("Task Bot URL is exactly the staging Task Bot origin"));
   assert.ok(failing(checkSecrets({ ...goodSecrets(), CONTENT_OS_RATE_LIMIT_PEPPER: "short" })).includes("rate-limit pepper is at least 32 characters"));
   const missing = goodSecrets();
   delete missing.CONTENT_OS_RATE_LIMIT_PEPPER;
@@ -112,6 +112,7 @@ test("staging preflight: secrets can only target staging Supabase and the stagin
   assert.deepEqual(parseSecretsFile('# c\nA="1"\nB=two\n'), { A: "1", B: "two" });
   assert.deepEqual(parseSecretsFile('{"A":"1"}'), { A: "1" });
   assert.equal(STAGING.supabaseRef, "yuznbaaoonyqonhiywkt");
+  assert.ok(failing(checkSecrets({ ...goodSecrets(), TASK_BACKEND_BASE_URL: "https://ibox-task-bot-staging.other-account.workers.dev" })).includes("Task Bot URL is exactly the staging Task Bot origin"), "another account's staging host is refused");
 });
 
 test("wrangler.jsonc: production and staging both keep preview URLs off; staging never reuses production's limiter namespace", () => {
@@ -119,7 +120,8 @@ test("wrangler.jsonc: production and staging both keep preview URLs off; staging
   assert.equal(config.preview_urls, false);
   assert.equal(config.env.staging.preview_urls, false);
   assert.equal(config.env.staging.workers_dev, true);
-  assert.notEqual(config.env.staging.ratelimits[0].namespace_id, config.ratelimits[0].namespace_id);
+  assert.equal(config.ratelimits[0].namespace_id, "1001", "production namespace unchanged");
+  assert.equal(config.env.staging.ratelimits[0].namespace_id, "1101", "owner-selected staging namespace");
   assert.deepEqual(config.env.staging.vars, stagingVars);
   assert.ok(!JSON.stringify(config).match(/cbjcclefgxrdyjwkjcpq/), "the production project ref never appears in Worker config");
 });
